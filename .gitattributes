@@ -1,0 +1,6 @@
+# LF everywhere, in the repo and in the working tree, so Windows and Linux builds agree.
+# On a Windows checkout, also set: git config core.autocrlf false
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary

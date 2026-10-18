@@ -1,0 +1,17 @@
+# The prototype's style, written down: 4 spaces, 100 columns, `T &x`, one-line accessors.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AlignConsecutiveShortCaseStatements:
+  Enabled: true
+IndentCaseLabels: true
+SpacesBeforeTrailingComments: 3
+AlwaysBreakTemplateDeclarations: Yes
+FixNamespaceComments: true
+IncludeBlocks: Preserve

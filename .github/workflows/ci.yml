@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gcc asan, cxx: g++, preset: asan }
+          - { name: clang release, cxx: clang++, preset: release }
+          - { name: gcc shared, cxx: g++, preset: shared }
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake --preset ${{ matrix.preset }} -DHF_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}
+      - name: Package check (install, then build a host against it)
+        run: |
+          cmake --install build/${{ matrix.preset }} --prefix "$RUNNER_TEMP/hf"
+          cmake -S tests/package -B build/package -G Ninja -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/hf"
+          cmake --build build/package
+          ./build/package/hf-consumer
+
+  windows:
+    name: msvc release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The Visual Studio generator rather than the Ninja presets: it needs no vcvars shell.
+      - run: cmake -S . -B build -DHF_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package check
+        shell: bash
+        run: |
+          cmake --install build --config Release --prefix "$RUNNER_TEMP/hf"
+          cmake -S tests/package -B build/package -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/hf"
+          cmake --build build/package --config Release
+          ./build/package/Release/hf-consumer.exe

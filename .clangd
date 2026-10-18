@@ -1,0 +1,3 @@
+# Every preset builds into build/<preset>; clangd reads the debug one.
+CompileFlags:
+  CompilationDatabase: build/debug

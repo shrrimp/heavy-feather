@@ -1,0 +1,18 @@
+# Build trees: the presets use build/<preset>, Visual Studio uses out/, CLion cmake-build-*/
+build/
+out/
+cmake-build-*/
+
+# Personal CMake presets
+CMakeUserPresets.json
+
+# clangd's index, and the compile_commands.json some setups symlink to the root
+.cache/
+/compile_commands.json
+
+# Editors and OS
+.vscode/
+.idea/
+.vs/
+*.swp
+.DS_Store

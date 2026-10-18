@@ -1,0 +1,5 @@
+@PACKAGE_INIT@
+
+# Heavy Feather has no dependencies, so there is nothing to find_dependency() here.
+include("${CMAKE_CURRENT_LIST_DIR}/HeavyFeatherTargets.cmake")
+check_required_components(HeavyFeather)

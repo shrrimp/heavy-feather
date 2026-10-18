@@ -26,7 +26,7 @@ It doesn't depend on any engine and for now the plan is for it to do no collisio
 
 ## Where it's at
 
-The repo is empty for now. A prototype of the design is loosely implemented in Heavy Metal, and it worked well enough that I decided to turn it into a standalone library, written from scratch.
+There's no physics in the repo yet, just the project around it: the build, the tests and the docs. A prototype of the design is loosely implemented in Heavy Metal, and it worked well enough that I decided to turn it into a standalone library, written from scratch.
 
 ## Roadmap
 (vague prediction)
@@ -37,3 +37,24 @@ The repo is empty for now. A prototype of the design is loosely implemented in H
 - **v0.4:** Break stuff: breakable joints, and load analysis for rigid-body rupture
 - **v0.5:** Performance and multi-threading
 - **v1.0:** Clean API, docs, and a basic host for testing and demos
+
+## Building
+
+C++20 and CMake 3.25+, no dependencies.
+
+```sh
+cmake --workflow --preset debug   # configure, build, test
+```
+
+To use it from your own project, `find_package(HeavyFeather)` or FetchContent, then link
+`HeavyFeather::HeavyFeather`. [docs/building.md](docs/building.md) has the details.
+
+## Docs
+
+- [Architecture](docs/architecture.md): how it works, and why
+- [Building](docs/building.md): presets, options, and using it from your project
+- [Contributing](CONTRIBUTING.md)
+
+## License
+
+[MIT](LICENSE)
