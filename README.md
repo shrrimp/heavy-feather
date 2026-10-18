@@ -26,7 +26,9 @@ It doesn't depend on any engine and for now the plan is for it to do no collisio
 
 ## Where it's at
 
-There's no physics in the repo yet, just the project around it: the build, the tests and the docs. A prototype of the design is loosely implemented in Heavy Metal, and it worked well enough that I decided to turn it into a standalone library, written from scratch.
+v0.1: machines built from bodies and joints and solved as articulations, motors and pistons, contacts with friction, and the basic `hf::World` API.
+
+It started as a prototype loosely implemented in Heavy Metal, which worked well enough that I decided to turn it into a standalone library. v0.1 is that prototype's machine solver, ported and cleaned up.
 
 ## Roadmap
 (vague prediction)

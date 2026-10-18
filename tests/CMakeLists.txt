@@ -13,7 +13,8 @@ set(HF_TEST_SOURCES
   DenseTests.cpp
   MachineTests.cpp
   SpatialTests.cpp
-  VersionTests.cpp)
+  VersionTests.cpp
+  WorldTests.cpp)
 
 # hf_objects rather than the shipped library: a shared build hides the internals these test.
 add_executable(hf-tests ${HF_TEST_SOURCES})

@@ -1,0 +1,267 @@
+#include "hf/World.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+#include "world/WorldImpl.hpp"
+
+namespace hf {
+
+    World::World(const WorldSettings &settings) : impl_(std::make_unique<Impl>()) {
+        impl_->settings = settings;
+        impl_->groups.emplace_back();
+    }
+
+    World::~World() = default;
+    World::World(World &&) noexcept = default;
+    World &World::operator=(World &&) noexcept = default;
+
+    const WorldSettings &World::settings() const { return impl_->settings; }
+    void World::setSettings(const WorldSettings &settings) { impl_->settings = settings; }
+
+    BodySlot *World::Impl::body(BodyId id) {
+        if (id.index >= bodies.size()) return nullptr;
+        BodySlot &b = bodies[id.index];
+        return b.alive && b.generation == id.generation ? &b : nullptr;
+    }
+
+    const BodySlot *World::Impl::body(BodyId id) const { return const_cast<Impl *>(this)->body(id); }
+
+    JointSlot *World::Impl::joint(JointId id) {
+        if (id.index >= joints.size()) return nullptr;
+        JointSlot &j = joints[id.index];
+        return j.alive && j.generation == id.generation ? &j : nullptr;
+    }
+
+    const JointSlot *World::Impl::joint(JointId id) const { return const_cast<Impl *>(this)->joint(id); }
+
+    BodyId World::addBody(const BodyDesc &desc) {
+        Impl &I = *impl_;
+        std::uint32_t index;
+        if (!I.freeBodies.empty()) {
+            index = I.freeBodies.back();
+            I.freeBodies.pop_back();
+        } else {
+            index = std::uint32_t(I.bodies.size());
+            I.bodies.emplace_back();
+        }
+        BodySlot &b = I.bodies[index];
+        b.desc = desc;
+        b.desc.orientation = normalize(desc.orientation);
+        b.alive = true;
+        b.group = -1;
+        I.dirty = true;
+        return {index, b.generation};
+    }
+
+    void World::removeBody(BodyId id) {
+        Impl &I = *impl_;
+        BodySlot *b = I.body(id);
+        if (!b) return;
+        for (std::uint32_t k = 0; k < I.joints.size(); ++k) {
+            const JointSlot &j = I.joints[k];
+            if (j.alive && (j.desc.a == id || j.desc.b == id)) removeJoint({k, j.generation});
+        }
+        b->alive = false;
+        ++b->generation;
+        b->group = -1;
+        I.freeBodies.push_back(id.index);
+        I.dirty = true;
+    }
+
+    bool World::contains(BodyId id) const { return impl_->body(id) != nullptr; }
+
+    Vec3 World::position(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        if (!b) return {};
+        Vec3 c, v, w;
+        Quat q;
+        impl_->bodyState(*b, c, q, v, w);
+        return c;
+    }
+
+    Quat World::orientation(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        if (!b) return {};
+        Vec3 c, v, w;
+        Quat q;
+        impl_->bodyState(*b, c, q, v, w);
+        return q;
+    }
+
+    Vec3 World::velocity(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        if (!b) return {};
+        Vec3 c, v, w;
+        Quat q;
+        impl_->bodyState(*b, c, q, v, w);
+        return v;
+    }
+
+    Vec3 World::angularVelocity(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        if (!b) return {};
+        Vec3 c, v, w;
+        Quat q;
+        impl_->bodyState(*b, c, q, v, w);
+        return w;
+    }
+
+    void World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return;
+        const Quat qb = normalize(orientation);
+        b->desc.position = position;
+        b->desc.orientation = qb;
+        if (b->group < 0) return;
+        Group &g = impl_->groups[std::size_t(b->group)];
+        g.q = normalize(qb * conjugate(b->rot));
+        g.c = position - g.q * b->offset;
+    }
+
+    void World::setVelocity(BodyId id, const Vec3 &velocity, const Vec3 &angularVelocity) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return;
+        b->desc.velocity = velocity;
+        b->desc.angularVelocity = angularVelocity;
+        if (b->group < 0) return;
+        Group &g = impl_->groups[std::size_t(b->group)];
+        if (g.isStatic) return;
+        g.w = angularVelocity;
+        g.v = velocity - cross(angularVelocity, g.q * b->offset);
+    }
+
+    void World::applyForce(BodyId id, const Vec3 &force, const Vec3 &point) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return;
+        b->force += force;
+        b->torque += cross(point - position(id), force);
+    }
+
+    void World::applyTorque(BodyId id, const Vec3 &torque) {
+        BodySlot *b = impl_->body(id);
+        if (b) b->torque += torque;
+    }
+
+    namespace {
+
+        // A joint frame in world coordinates; an invalid body is the world.
+        void frameInWorld(const World &w, BodyId body, const Frame &f, Vec3 &p, Quat &q) {
+            if (!body.valid()) {
+                p = f.position;
+                q = f.rotation;
+                return;
+            }
+            const Quat qb = w.orientation(body);
+            p = w.position(body) + qb * f.position;
+            q = qb * f.rotation;
+        }
+
+    } // namespace
+
+    JointId World::addJoint(const JointDesc &desc) {
+        Impl &I = *impl_;
+        const bool aOk = desc.a.valid() ? I.body(desc.a) != nullptr : desc.b.valid();
+        const bool bOk = desc.b.valid() ? I.body(desc.b) != nullptr : desc.a.valid();
+        if (!aOk || !bOk || desc.a == desc.b) return {};
+        std::uint32_t index;
+        if (!I.freeJoints.empty()) {
+            index = I.freeJoints.back();
+            I.freeJoints.pop_back();
+        } else {
+            index = std::uint32_t(I.joints.size());
+            I.joints.emplace_back();
+        }
+        JointSlot &j = I.joints[index];
+        const std::uint32_t generation = j.generation;
+        j = JointSlot{};
+        j.generation = generation;
+        j.desc = desc;
+        j.alive = true;
+        j.targetFrom = j.targetTo = j.targetEff = desc.target;
+        I.dirty = true;
+        // A piston's setpoint starts where the piston is, and travels to its target at the drive's speed.
+        if (desc.type == JointType::Piston)
+            j.targetFrom = j.targetTo = j.targetEff = jointPosition({index, generation});
+        return {index, generation};
+    }
+
+    void World::removeJoint(JointId id) {
+        Impl &I = *impl_;
+        JointSlot *j = I.joint(id);
+        if (!j) return;
+        j->alive = false;
+        ++j->generation;
+        I.freeJoints.push_back(id.index);
+        I.dirty = true;
+    }
+
+    bool World::contains(JointId id) const { return impl_->joint(id) != nullptr; }
+
+    void World::setTarget(JointId id, double target) {
+        JointSlot *j = impl_->joint(id);
+        if (!j) return;
+        const bool piston = j->desc.type == JointType::Piston;
+        j->desc.target = piston ? std::clamp(target, j->desc.min, j->desc.max) : target;
+        j->commanded = true;
+    }
+
+    double World::target(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        return j ? j->desc.target : 0.0;
+    }
+
+    double World::jointPosition(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        if (!j) return 0.0;
+        Vec3 pA, pB;
+        Quat qA, qB;
+        frameInWorld(*this, j->desc.a, j->desc.frameA, pA, qA);
+        frameInWorld(*this, j->desc.b, j->desc.frameB, pB, qB);
+        switch (j->desc.type) {
+            case JointType::Hinge:
+            case JointType::Motor:
+            case JointType::AngularSpring: {
+                const Vec3 yA = qA * Vec3{0, 1, 0}, zA = qA * Vec3{0, 0, 1}, yB = qB * Vec3{0, 1, 0};
+                return std::atan2(dot(yB, zA), dot(yB, yA));
+            }
+            case JointType::Slider:
+            case JointType::Piston: return dot(pB - pA, qA * Vec3{1, 0, 0});
+            case JointType::Spring: return length(pA - pB);
+            case JointType::Fixed:
+            case JointType::Ball: return 0.0;
+        }
+        return 0.0;
+    }
+
+    double World::driveForce(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        return j && impl_->h > 0.0 ? j->lambda / impl_->h : 0.0;
+    }
+
+    JointInfo World::jointInfo(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        return j ? j->info : JointInfo{};
+    }
+
+    void World::clearContacts() { impl_->contacts.clear(); }
+
+    void World::addContact(const Contact &contact) {
+        if (!impl_->body(contact.a) || !impl_->body(contact.b) || contact.a == contact.b) return;
+        ContactData c;
+        c.in = contact;
+        c.in.normal = normalize(contact.normal);
+        impl_->contacts.push_back(c);
+    }
+
+    void World::step(double dt) { impl_->step(dt); }
+
+    WorldStats World::stats() const {
+        WorldStats s = impl_->stats;
+        s.bodies = int(impl_->bodies.size() - impl_->freeBodies.size());
+        s.joints = int(impl_->joints.size() - impl_->freeJoints.size());
+        return s;
+    }
+
+} // namespace hf

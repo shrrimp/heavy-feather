@@ -9,10 +9,16 @@ include(GNUInstallDirs)
 
 set(HF_SOURCES
   Version.cpp
+  contact/Contacts.cpp
   dynamics/Articulation.cpp
   math/Dense.cpp
   solver/BoxLcp.cpp
-  solver/Machine.cpp)
+  solver/Machine.cpp
+  world/Groups.cpp
+  world/MachineRows.cpp
+  world/Machines.cpp
+  world/Step.cpp
+  world/World.cpp)
 
 add_library(hf_objects OBJECT ${HF_SOURCES})
 add_library(heavy_feather $<TARGET_OBJECTS:hf_objects>)
