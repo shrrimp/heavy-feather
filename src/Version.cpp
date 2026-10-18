@@ -2,6 +2,6 @@
 
 namespace hf {
 
-Version version() { return {HF_VERSION_MAJOR, HF_VERSION_MINOR, HF_VERSION_PATCH}; }
+    Version version() { return {HF_VERSION_MAJOR, HF_VERSION_MINOR, HF_VERSION_PATCH}; }
 
-}   // namespace hf
+} // namespace hf

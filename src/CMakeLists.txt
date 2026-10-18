@@ -8,7 +8,8 @@
 include(GNUInstallDirs)
 
 set(HF_SOURCES
-  Version.cpp)
+  Version.cpp
+  math/Dense.cpp)
 
 add_library(hf_objects OBJECT ${HF_SOURCES})
 add_library(heavy_feather $<TARGET_OBJECTS:hf_objects>)

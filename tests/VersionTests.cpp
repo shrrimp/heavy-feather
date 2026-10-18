@@ -1,6 +1,6 @@
-#include "hf/Version.hpp"
-
 #include <doctest/doctest.h>
+
+#include "hf/Version.hpp"
 
 TEST_CASE("the linked binary is the version its headers describe") {
     const hf::Version v = hf::version();

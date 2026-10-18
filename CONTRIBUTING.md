@@ -26,6 +26,13 @@ warnings as errors.
 
 - `PascalCase` for types and files, `camelCase` for functions and variables
 - `member_` for private members, `kName` for constants, `HF_` for macros
-- everything public goes in namespace `hf`; tests go in `tests/<module>_test.cpp`
+- everything goes in namespace `hf`
 
-Comments say why, not what.
+Comments are rare: a short one on public functions and types when the name isn't enough. The code
+should read on its own.
+
+## Tests
+
+One doctest file per topic, `tests/<Topic>Tests.cpp`, with each check saying what it shows:
+`CHECK_MESSAGE(condition, "what it shows")`. Expected values come from a hand derivation or an independent
+referee (another algorithm, a finite difference), never from running the code under test.
