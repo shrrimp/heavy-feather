@@ -49,7 +49,7 @@
     { "name": "debug", "inherits": "base", "configurePreset": "debug" },
     { "name": "release", "inherits": "base", "configurePreset": "release" },
     { "name": "asan", "inherits": "base", "configurePreset": "asan" },
-    { "name": "shared", "inherits": "base", "configurePreset": "shared" }
+    { "name": "shared", "inherits": "base", "configurePreset": "shared", "filter": { "exclude": { "label": "perf" } } }
   ],
   "workflowPresets": [
     {

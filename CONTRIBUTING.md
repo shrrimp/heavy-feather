@@ -36,3 +36,7 @@ should read on its own.
 One doctest file per topic, `tests/<Topic>Tests.cpp`, with each check saying what it shows:
 `CHECK_MESSAGE(condition, "what it shows")`. Expected values come from a hand derivation or an independent
 referee (another algorithm, a finite difference), never from running the code under test.
+
+`tests/host/` is a small game around the library: collision for boxes, spheres and planes, mixed stress scenes,
+and a count of every allocation. The stress, memory and determinism tests run on it, and so does `hf-bench`, which
+times the large scenes; build it in release and run it with `--check` to hold each scene to its budget.

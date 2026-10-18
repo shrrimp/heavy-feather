@@ -7,8 +7,8 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-# A small game around the library: collision, scenes, and an allocation counter. An object library, so the
-# counting operator new is always linked in.
+# A small game around the library: collision, scenes, and an allocation counter, shared by the tests and the
+# benchmark. An object library, so the counting operator new is always linked in.
 add_library(hf-test-host OBJECT
   host/Allocations.cpp
   host/Collision.cpp
@@ -21,8 +21,11 @@ set(HF_TEST_SOURCES
   ArticulationTests.cpp
   BoxLcpTests.cpp
   DenseTests.cpp
+  DriveTests.cpp
   MachineTests.cpp
+  MemoryTests.cpp
   SpatialTests.cpp
+  StressTests.cpp
   VersionTests.cpp
   WorldTests.cpp)
 
@@ -30,3 +33,12 @@ set(HF_TEST_SOURCES
 add_executable(hf-tests ${HF_TEST_SOURCES})
 target_link_libraries(hf-tests PRIVATE hf-test-host hf_objects doctest::doctest_with_main hf_warnings)
 add_test(NAME hf-tests COMMAND hf-tests)
+
+add_executable(hf-bench bench/Bench.cpp)
+target_link_libraries(hf-bench PRIVATE hf-test-host hf_objects hf_warnings)
+
+# Timings only mean something optimised and without sanitizers.
+if(CMAKE_BUILD_TYPE MATCHES "Rel" AND NOT CMAKE_CXX_FLAGS MATCHES "sanitize")
+  add_test(NAME hf-bench COMMAND hf-bench --check)
+  set_tests_properties(hf-bench PROPERTIES LABELS perf)
+endif()
