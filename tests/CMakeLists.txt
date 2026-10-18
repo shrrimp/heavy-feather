@@ -8,7 +8,10 @@ FetchContent_Declare(doctest
 FetchContent_MakeAvailable(doctest)
 
 set(HF_TEST_SOURCES
+  ArticulationTests.cpp
+  BoxLcpTests.cpp
   DenseTests.cpp
+  MachineTests.cpp
   SpatialTests.cpp
   VersionTests.cpp)
 
