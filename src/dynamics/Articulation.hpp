@@ -72,12 +72,25 @@ namespace hf {
 
         // Moves O, then fills every link's S, V, A and inertias. Needs current poses.
         void updateKinematics(const Vec3 &newO);
+        // V and A again for other joint velocities, the configuration unchanged. Needs updateKinematics.
+        void updateVelocities(const double *qd);
 
         // The joint-space mass matrix, n×n row-major (CRBA). Needs updateKinematics.
         void massMatrix(std::vector<double> &M) const;
 
         // C in M qddot + C = tau + Jᵀλ, with gravity g and per-link wrenches about O (RNEA). fext may be empty.
         void biasForces(const Vec3 &g, const std::vector<Force> &fext, std::vector<double> &C);
+
+        // M's diagonal alone, from the composite inertias. Needs updateKinematics.
+        void massDiagonal(std::vector<double> &d) const;
+
+        // M factored through articulated-body inertias (ABA), then x <- M⁻¹ x in O(n) for as many right-hand sides
+        // as needed. Needs updateKinematics.
+        void factorMass();
+        void solveMass(double *x) const;
+        // M⁻¹ Jᵀ f for up to three wrenches f at one link (about O): out holds count rows of dofs() values. The
+        // inward pass only climbs from the link to the root, so this costs one outward pass over the machine.
+        void solveAt(int link, const Force *f, int count, double *out) const;
 
         // Adds scale × (the row mapping qdot to dir · velocity of the point xWorld on link) into row.
         void addPointRow(int link, const Vec3 &xWorld, const Vec3 &dir, double scale, double *row) const;
@@ -86,6 +99,8 @@ namespace hf {
         void addAngularRow(int link, const Vec3 &axis, double scale, double *row) const;
 
         Motion twistOf(int link, const double *qd) const;
+        // Every link's twist in one pass, parents first.
+        void twists(const double *qd, std::vector<Motion> &V) const;
         Vec3 linkVelocity(int link) const; // of its centre of mass
         Vec3 linkOmega(int link) const;
 
@@ -97,6 +112,19 @@ namespace hf {
 
     private:
         int ndof_ = 0;
+
+        // One link's share of the factorisation: U = IA S and D⁻¹ = (Sᵀ IA S)⁻¹, k columns for k dofs.
+        struct Factor {
+            ArticulatedInertia IA;
+            Force U[6];
+            double Dinv[6][6];
+        };
+        std::vector<Factor> factor_;
+        mutable std::vector<Force> bias_;
+        mutable std::vector<Motion> acc_;
+        mutable std::vector<double> u_;
+        mutable std::vector<std::uint32_t> onPath_;
+        mutable std::uint32_t pathStamp_ = 0;
 
         void parentPose(int link, Vec3 &c, Quat &R) const;
         Vec3 parentAnchor(int link) const;

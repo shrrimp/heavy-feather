@@ -9,6 +9,23 @@ namespace hf {
 
         bool rigid(const Group &g) { return !g.isStatic && g.machine < 0; }
 
+        // The spin's own torque, ω × Iω, at the step's midpoint: I(ω' − ω) + h ω_m × Iω_m = 0 in the body frame,
+        // solved by Newton. The midpoint keeps a free body's energy and angular momentum; taken at the start, a thin
+        // body spinning near its long axis gains energy every step until it explodes, and left out it never precesses.
+        void gyroscopic(Group &g, double h) {
+            const Mat3 R = toMat3(g.q);
+            const Mat3 &I = g.inertiaBody;
+            const Vec3 w = transpose(R) * g.w;
+            Vec3 next = w;
+            for (int k = 0; k < 2; ++k) {
+                const Vec3 m = 0.5 * (w + next), Im = I * m;
+                const Vec3 f = I * (next - w) + h * cross(m, Im);
+                const Mat3 J = I + 0.5 * h * (skew(m) * I - skew(Im));
+                next = next - inverse(J) * f;
+            }
+            g.w = R * next;
+        }
+
         void integrateRigid(Group &g, double h) {
             g.c += (g.v + g.pv) * h;
             const Vec3 w = g.w + g.pw;
@@ -65,6 +82,7 @@ namespace hf {
                 if (!rigid(g)) continue;
                 g.v += h * (g.invMass * g.force + settings.gravity);
                 g.w += h * (g.invInertiaWorld() * g.torque);
+                gyroscopic(g, h);
             }
             for (MachineData &md : machines) solveInternal(md);
 
@@ -91,6 +109,7 @@ namespace hf {
         restitution();
         for (MachineData &md : machines) writeVelocities(md);
         storeContacts();
+        carriedRows.clear();
 
         stats = WorldStats{};
         stats.contacts = int(prep.size());

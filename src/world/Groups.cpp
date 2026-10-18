@@ -113,7 +113,9 @@ namespace hf {
             g.invMass = 1.0 / M[gi];
             const Mat3 R = toMat3(g.q);
             const Mat3 Ibody = transpose(R) * Iw[gi] * R;
-            g.invInertiaBody = std::fabs(determinant(Ibody)) > 1e-300 ? inverse(Ibody) : Mat3(1.0 / (1e-3 * M[gi]));
+            const bool solid = std::fabs(determinant(Ibody)) > 1e-300;
+            g.inertiaBody = solid ? Ibody : Mat3(1e-3 * M[gi]);
+            g.invInertiaBody = inverse(g.inertiaBody);
             g.v = P[gi] / M[gi];
             g.w = std::fabs(determinant(Iw[gi])) > 1e-300 ? inverse(Iw[gi]) * L[gi] : Vec3{};
         }

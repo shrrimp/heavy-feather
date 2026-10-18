@@ -39,10 +39,11 @@ namespace hf {
         Articulation art;
         MachineStats stats;
 
-        // M (CRBA), C (RNEA) and the free velocity qdot + h M⁻¹(-C). jointDiag is added to M's diagonal (implicit
-        // joint damping or stiffness) and may be empty.
-        void dynamics(double h, const Vec3 &gravity, const std::vector<Force> &fext,
-                      const std::vector<double> &jointDiag = {});
+        // M factored (dense up to a few dofs, the articulated-body recursion beyond), C (RNEA) at the sub-step's
+        // midpoint velocity, and the free velocity qdot + h M⁻¹(-C).
+        void dynamics(double h, const Vec3 &gravity, const std::vector<Force> &fext);
+        // Machines up to this many dofs are solved through a dense Cholesky of M; larger ones in O(n).
+        int denseDofs = 12;
 
         // Adds a row and returns its J, dofs() zeros to fill in.
         double *addRow(const MachineRow &r);
@@ -51,7 +52,6 @@ namespace hf {
 
         // J M⁻¹ Jᵀ for a row not added yet: what a spring's frequency needs to become a stiffness.
         double inverseMassAlong(const double *J) const;
-        double unconstrainedMobility(const double *g) const { return inverseMassAlong(g); }
 
         // Y = M⁻¹ Jᵀ and A = J M⁻¹ Jᵀ, regularised. Call once the rows are in.
         void prepareRows();
@@ -59,14 +59,22 @@ namespace hf {
         // The rows' direct solve from the free velocity. state is the warm start, kept per row by the caller.
         BoxLcpStats solveRows(std::vector<RowState> &state);
 
-        // W = M⁻¹ − Yᵀ A⁻¹ Y over the equality rows: the machine's response to an impulse with them held.
+        // W = M⁻¹ − Yᵀ A⁻¹ Y over the equality rows: the machine's response to an impulse with them held. Only A's
+        // block is factored; W itself is never formed.
         void buildMobility();
 
-        // w = W g
-        void mobility(const double *g, double *w) const;
+        // w = W g. Returns gᵀ M⁻¹ g, the mobility with nothing held.
+        double mobility(const double *g, double *w) const;
+
+        // A link's response to the six unit wrenches about O: Z, six rows of dofs() values with the held rows kept,
+        // and the link's 6×6 inverse inertia with them held and with nothing held. Any wrench ψ at the link then
+        // moves the machine by Σ ψ_c Z_c, its own twist by held ψ, and every contact on one link shares one solve.
+        void linkResponse(int link, double *Z, double held[6][6], double unheld[6][6]) const;
 
         // Applies an impulse of size mu along a generalised direction g, given w = W g.
         void applyContact(const double *w, double mu);
+        // Adds Σ f_c Z_c to the velocity, or to the pseudo-velocity: a wrench at a link, through its response.
+        void applyWrench(const double *Z, const Force &f, bool pseudo);
 
         // Bounded rows (capped drives, limits) are swept through W beside the contacts, so a drive at its cap and
         // the contact loading it agree. prepareBounded once after buildMobility, sweepBounded every iteration.
@@ -79,7 +87,6 @@ namespace hf {
         void clearPosRows();
         double *addPosRow(const MachineRow &r);
         BoxLcpStats solvePositions(std::vector<RowState> &state);
-        void applyPseudo(const double *w, double mu);
         const std::vector<double> &pseudo() const { return pqdot_; }
 
         // The line search on the pseudo-velocity: keepPseudo, then scale to or restore any fraction of it.
@@ -101,12 +108,14 @@ namespace hf {
 
     private:
         int n_ = 0;
-        std::vector<double> M_, L_, Minv_, C_, qdotFree_, pqdot_, pqdotKept_, tmp_;
+        bool dense_ = true;
+        static constexpr int kMidpointPasses = 3;
+        std::vector<double> M_, L_, diagM_, C_, qdotFree_, qdotMid_, pqdot_, pqdotKept_;
+        mutable std::vector<double> tmp_, free_;
 
         std::vector<MachineRow> rows_;
         std::vector<double> J_, Y_, A_, diag_, b_, lo_, hi_, lambda_;
         std::vector<std::uint8_t> dead_;
-        std::vector<double> W_;
         std::vector<int> freeIdx_;
         std::vector<double> Aff_;
         std::vector<int> bIdx_;       // bounded rows
@@ -119,6 +128,10 @@ namespace hf {
         BoxLcpScratch lcp_;
         std::vector<double> jac_;
 
+        void solveMass(double *x) const; // x <- M⁻¹ x
+        void solveAtLink(int link, const Force *f, double *w) const;
+        void holdRows(double *w) const; // w <- w − Yᵀ A⁻¹ J w over the held rows
+        void solveRowsOf(const std::vector<double> &J, std::size_t m, std::vector<double> &Y) const;
         void clearRows();
         void solveWithBase(const std::vector<double> &base, std::vector<RowState> &state, BoxLcpStats &st);
         void regularise(std::vector<double> &A, const std::vector<double> &diag, const std::vector<MachineRow> &rows,

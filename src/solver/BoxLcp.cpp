@@ -17,10 +17,7 @@ namespace hf {
 
         double rowResidual(const std::vector<double> &A, const std::vector<double> &b, const std::vector<double> &x,
                            int m, int i) {
-            const double *Ai = A.data() + std::size_t(i) * std::size_t(m);
-            double w = b[std::size_t(i)];
-            for (int j = 0; j < m; ++j) w += Ai[j] * x[std::size_t(j)];
-            return w;
+            return b[std::size_t(i)] + dot(A.data() + std::size_t(i) * std::size_t(m), x.data(), std::size_t(m));
         }
 
     } // namespace

@@ -45,6 +45,10 @@ namespace hf {
         Vec3 angularVelocity(BodyId body) const;
         void setPose(BodyId body, const Vec3 &position, const Quat &orientation);
         void setVelocity(BodyId body, const Vec3 &velocity, const Vec3 &angularVelocity);
+        // New mass and inertia (about the centre of mass, body axes), as an edit changes them; the body carries on.
+        void setMassProperties(BodyId body, double mass, const Mat3 &inertia);
+        // A static body doesn't move and isn't pushed: a host's sleeping body, or one pinned in place.
+        void setStatic(BodyId body, bool isStatic);
 
         // A force at a world point, or a torque, for the next step only.
         void applyForce(BodyId body, const Vec3 &force, const Vec3 &point);
@@ -54,10 +58,13 @@ namespace hf {
         void removeJoint(JointId joint);
         bool contains(JointId joint) const;
 
-        // A motor's angular velocity, or a piston's position.
+        // A motor's angular velocity, a piston's position, or a servo's angle.
         void setTarget(JointId joint, double target);
+        // Works a drive like an operator's lever, from -1 to 1: a piston or servo moves at that fraction of its
+        // speed, and back at 0 stops where it actually is and holds there; a motor turns at that fraction of its speed.
+        void setLever(JointId joint, double lever);
         double target(JointId joint) const;
-        double jointPosition(JointId joint) const; // a hinge's angle in rad, a slider's position in m
+        double jointPosition(JointId joint) const; // a hinge's or servo's angle in rad, a slider's position in m
         double driveForce(JointId joint) const;    // over the last sub-step, N or N·m
         JointInfo jointInfo(JointId joint) const;
 

@@ -23,7 +23,6 @@ namespace hf {
         // fight.
         constexpr double kServoYield = 1e-2;
         constexpr double kServoRate = 0.01;     // m/s: how fast a piston's servo corrects drift near its target
-        constexpr double kServoDeadband = 1e-3; // m: beyond this, it closes at its own speed instead
         constexpr double kDriveReached = 1e-4;  // m: a valved piston this close to its target shuts
         constexpr double kDriveSatSlack = 1e-9;
         constexpr double kDriveBackstep = 1e-6; // m: how far a load must push a saturated piston back to shut it
@@ -53,8 +52,6 @@ namespace hf {
         World::Impl &I;
         MachineData &md;
         Mode mode;
-        std::vector<double> *errors = nullptr;
-        std::vector<double> scratch;
 
         bool position() const { return mode != Mode::Velocity; }
 
@@ -64,9 +61,11 @@ namespace hf {
                 case Mode::Position: md.posTags.push_back(tag); return md.m.addPosRow(row);
                 case Mode::Measure: break;
             }
-            errors->push_back(C);
-            scratch.assign(std::size_t(md.m.dofs()), 0.0);
-            return scratch.data();
+            // Scored as the solve weighs them: a servo yields to a closure there, so a correction that closes a loop
+            // at a servo's expense is an improvement, not a step to refuse.
+            md.errors.push_back(row.relEps >= kServoYield ? kServoYield * C : C);
+            md.row.assign(std::size_t(md.m.dofs()), 0.0);
+            return md.row.data();
         }
 
         Vec3 endPoint(const End &e, int link) const {
@@ -139,7 +138,8 @@ namespace hf {
         };
 
         const JointType t = j.desc.type;
-        if (t == JointType::Ball || t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring) {
+        if (t == JointType::Ball || t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring ||
+            t == JointType::Servo) {
             // A cut hinge closes as a ball: its axis rows hold nothing on a planar loop and lock one that is slightly
             // out of plane, where the misaligned cut should show its tilt instead.
             for (int k = 0; k < 3; ++k) {
@@ -196,11 +196,15 @@ namespace hf {
             hingeRateRow(r, 1.0, add(row, tagOf(j, r.joint, kDrive), 0.0));
         }
 
-        if (d.type == JointType::Piston || d.type == JointType::Slider) {
-            const double pos = sliderPos(r);
-            j.slidePos = pos;
+        if (positionDrive(d.type) || d.type == JointType::Slider) {
+            const bool turns = d.type == JointType::Servo;
+            const double pos = turns ? hingeAngle(r) : sliderPos(r);
+            const auto rateRow = [&](double scale, double *J) {
+                if (turns) hingeRateRow(r, scale, J);
+                else sliderRateRow(r, scale, J);
+            };
             bool driveUnbounded = false;
-            if (d.type == JointType::Piston) {
+            if (positionDrive(d.type)) {
                 // The valve: force-capped while the pump drives it, rigid once shut, holding where it stalled if it
                 // was mid-travel.
                 const bool valved = std::isfinite(d.maxForce);
@@ -221,14 +225,14 @@ namespace hf {
                     // A servo with a finite flow, not a teleport: inside the deadband it corrects at kServoRate, so
                     // twin cylinders only nudge each other; outside, at its own speed.
                     row.relEps = kServoYield;
-                    const double e = pos - want;
+                    const double e = turns ? std::remainder(pos - want, 2.0 * std::numbers::pi) : pos - want;
                     const double cap = std::fabs(e) > kServoDeadband ? std::max(d.speed, kServoRate) : kServoRate;
                     row.target = std::clamp(-(kJointBeta / h) * e, -cap, cap);
-                    sliderRateRow(r, 1.0, add(row, tagOf(j, r.joint, kPosBase + kDrive), e));
+                    rateRow(1.0, add(row, tagOf(j, r.joint, kPosBase + kDrive), e));
                 } else {
                     row.target = hold ? 0.0 : j.targetRate;
                     md.driveRow[ri] = m.rowCount();
-                    sliderRateRow(r, 1.0, add(row, tagOf(j, r.joint, kDrive), 0.0));
+                    rateRow(1.0, add(row, tagOf(j, r.joint, kDrive), 0.0));
                 }
             }
             // Course limits, within kLimitSlop of their stop. Left out while an unbounded drive owns the axis: its
@@ -245,10 +249,10 @@ namespace hf {
                     if (position()) {
                         if (gap[i] >= 0.0) continue; // nothing to correct until it is past
                         row.target = std::min(-(kJointBeta / h) * gap[i], kMaxPosBias);
-                        sliderRateRow(r, dir, add(row, tagOf(j, r.joint, kPosBase + slot), gap[i]));
+                        rateRow(dir, add(row, tagOf(j, r.joint, kPosBase + slot), gap[i]));
                     } else {
                         row.target = gap[i] > 0.0 ? -gap[i] / h : 0.0; // arrive on the stop, no faster
-                        sliderRateRow(r, dir, add(row, tagOf(j, r.joint, slot), 0.0));
+                        rateRow(dir, add(row, tagOf(j, r.joint, slot), 0.0));
                     }
                 }
             }
@@ -257,11 +261,13 @@ namespace hf {
         if (position()) return;
 
         if (d.type == JointType::AngularSpring) {
-            std::vector<double> J(std::size_t(m.dofs()), 0.0);
+            std::vector<double> &J = md.row;
+            J.assign(std::size_t(m.dofs()), 0.0);
             hingeRateRow(r, 1.0, J.data());
             MachineRow row;
             springRow(m.inverseMassAlong(J.data()), d.hertz, d.damping, hingeAngle(r), h, row.compliance, row.target);
-            std::copy(J.begin(), J.end(), add(row, tagOf(j, r.joint, kSpring), 0.0));
+            double *dst = add(row, tagOf(j, r.joint, kSpring), 0.0);
+            std::copy(J.begin(), J.end(), dst);
         }
 
         if (d.type == JointType::Spring) {
@@ -269,29 +275,40 @@ namespace hf {
             const double len = length(pA - pB);
             if (len > 1e-9) {
                 const Vec3 n = (pA - pB) / len;
-                std::vector<double> J(std::size_t(m.dofs()), 0.0);
+                std::vector<double> &J = md.row;
+                J.assign(std::size_t(m.dofs()), 0.0);
                 m.art.addPointRow(r.linkA, pA, n, 1.0, J.data());
                 m.art.addPointRow(r.linkB, pB, n, -1.0, J.data());
                 MachineRow row;
                 springRow(m.inverseMassAlong(J.data()), d.hertz, d.damping, len - d.restLength, h, row.compliance,
                           row.target);
-                std::copy(J.begin(), J.end(), add(row, tagOf(j, r.joint, kSpring), 0.0));
+                double *dst = add(row, tagOf(j, r.joint, kSpring), 0.0);
+                std::copy(J.begin(), J.end(), dst);
             }
         }
     }
 
     namespace {
 
-        void warmRows(const World::Impl &I, std::vector<RowState> &state, const std::vector<std::uint64_t> &tags) {
-            state.resize(tags.size());
-            for (std::size_t i = 0; i < tags.size(); ++i) {
-                const auto it = I.rowState.find(tags[i]);
-                state[i] = it == I.rowState.end() ? RowState::Free : it->second;
-            }
+        using RowStates = std::vector<std::pair<std::uint64_t, RowState>>;
+
+        RowState lastState(const RowStates &rows, std::uint64_t tag, RowState otherwise) {
+            const auto it = std::lower_bound(rows.begin(), rows.end(), std::pair{tag, RowState::Free},
+                                             [](const auto &x, const auto &y) { return x.first < y.first; });
+            return it != rows.end() && it->first == tag ? it->second : otherwise;
         }
 
-        void keepRows(World::Impl &I, const std::vector<RowState> &state, const std::vector<std::uint64_t> &tags) {
-            for (std::size_t i = 0; i < tags.size() && i < state.size(); ++i) I.rowState[tags[i]] = state[i];
+        void warmRows(const World::Impl &I, const RowStates &last, std::vector<RowState> &state,
+                      const std::vector<std::uint64_t> &tags) {
+            state.resize(tags.size());
+            for (std::size_t i = 0; i < tags.size(); ++i)
+                state[i] = lastState(last, tags[i], lastState(I.carriedRows, tags[i], RowState::Free));
+        }
+
+        void keepRows(RowStates &last, const std::vector<RowState> &state, const std::vector<std::uint64_t> &tags) {
+            last.clear();
+            for (std::size_t i = 0; i < tags.size() && i < state.size(); ++i) last.push_back({tags[i], state[i]});
+            std::sort(last.begin(), last.end(), [](const auto &x, const auto &y) { return x.first < y.first; });
         }
 
         void recordDrives(World::Impl &I, MachineData &md) {
@@ -301,7 +318,7 @@ namespace hf {
                 if (row < 0 || std::size_t(row) >= lambda.size()) continue;
                 JointSlot &j = I.joints[md.joints[ri].joint];
                 j.lambda = lambda[std::size_t(row)];
-                if (j.desc.type == JointType::Piston)
+                if (positionDrive(j.desc.type))
                     j.driveSat = j.desc.maxForce > 0.0 ? j.lambda / (j.desc.maxForce * I.h) : 0.0;
             }
         }
@@ -316,34 +333,33 @@ namespace hf {
 
         // The error the line search scores: Σ C² over the position rows, from the current poses.
         double positionResidual(World::Impl &I, MachineData &md) {
-            std::vector<double> errors;
-            RowBuilder rb{I, md, RowBuilder::Mode::Measure, &errors, {}};
+            md.errors.clear();
+            RowBuilder rb{I, md, RowBuilder::Mode::Measure};
             addJointRows(rb);
             double s = 0.0;
-            for (double c : errors) s += c * c;
+            for (double c : md.errors) s += c * c;
             return s;
         }
 
+        // The pose the line search tries corrections from: the coordinates, and a floating root's own pose.
         struct Saved {
-            std::vector<double> q;
-            std::vector<Quat> qRot;
             Vec3 c0{};
             Quat R0{};
         };
 
-        void save(const Machine &m, Saved &st) {
-            st.q = m.art.q;
-            st.qRot = m.art.qRot;
-            st.c0 = m.art.links[0].c;
-            st.R0 = m.art.links[0].R;
+        Saved save(MachineData &md) {
+            md.savedQ = md.m.art.q;
+            md.savedQRot = md.m.art.qRot;
+            return {md.m.art.links[0].c, md.m.art.links[0].R};
         }
 
-        void restore(Machine &m, const Saved &st) {
-            m.art.q = st.q;
-            m.art.qRot = st.qRot;
-            m.art.links[0].c = st.c0;
-            m.art.links[0].R = st.R0;
-            m.art.forwardKinematics();
+        void restore(MachineData &md, const Saved &st) {
+            Articulation &art = md.m.art;
+            art.q = md.savedQ;
+            art.qRot = md.savedQRot;
+            art.links[0].c = st.c0;
+            art.links[0].R = st.R0;
+            art.forwardKinematics();
         }
 
     } // namespace
@@ -359,12 +375,12 @@ namespace hf {
 
         md.velTags.clear();
         md.driveRow.assign(md.joints.size(), -1);
-        RowBuilder rb{*this, md, RowBuilder::Mode::Velocity, nullptr, {}};
+        RowBuilder rb{*this, md, RowBuilder::Mode::Velocity};
         addJointRows(rb);
         m.prepareRows();
-        warmRows(*this, md.velState, md.velTags);
+        warmRows(*this, md.lastVel, md.velState, md.velTags);
         m.solveRows(md.velState);
-        keepRows(*this, md.velState, md.velTags);
+        keepRows(md.lastVel, md.velState, md.velTags);
         m.buildMobility();
         m.prepareBounded();
         recordDrives(*this, md);
@@ -374,11 +390,11 @@ namespace hf {
     void World::Impl::solvePositions(MachineData &md) {
         md.m.clearPosRows();
         md.posTags.clear();
-        RowBuilder rb{*this, md, RowBuilder::Mode::Position, nullptr, {}};
+        RowBuilder rb{*this, md, RowBuilder::Mode::Position};
         addJointRows(rb);
-        warmRows(*this, md.posState, md.posTags);
+        warmRows(*this, md.lastPos, md.posState, md.posTags);
         md.m.solvePositions(md.posState);
-        keepRows(*this, md.posState, md.posTags);
+        keepRows(md.lastPos, md.posState, md.posTags);
     }
 
     void World::Impl::afterContacts(MachineData &md) {
@@ -391,8 +407,9 @@ namespace hf {
         // The ceiling on one sub-step's position correction, over the whole machine: scaled, never zeroed, so a
         // correction that is merely too fast arrives late rather than not at all.
         double worst = 0.0;
+        m.art.twists(m.pseudo().data(), md.twists);
         for (std::size_t l = 0; l < md.groupOfLink.size(); ++l) {
-            const Motion V = m.art.twistOf(int(l), m.pseudo().data());
+            const Motion &V = md.twists[l];
             const Vec3 vc = pointVelocity(V, m.art.links[l].c - m.art.O);
             const double radius = groups[std::size_t(md.groupOfLink[l])].radius;
             worst = std::max(worst, (length(vc) + length(V.w) * radius) * h);
@@ -408,22 +425,21 @@ namespace hf {
         bool anyPseudo = false;
         for (double x : m.pseudo()) anyPseudo |= (x != 0.0);
         if (anyPseudo) {
-            Saved st;
-            save(m, st);
+            const Saved st = save(md);
             m.integrate(h);
             const double rFull = positionResidual(*this, md);
-            restore(m, st);
+            restore(md, st);
             m.scalePseudo(0.0);
             m.integrate(h);
             const double rNone = positionResidual(*this, md);
-            restore(m, st);
+            restore(md, st);
             if (rFull <= rNone) {
                 m.restorePseudo();
             } else {
                 m.restorePseudo(0.5);
                 m.integrate(h);
                 const double rHalf = positionResidual(*this, md);
-                restore(m, st);
+                restore(md, st);
                 if (rHalf < rNone) m.restorePseudo(0.5);
                 else m.scalePseudo(0.0);
             }
@@ -432,21 +448,40 @@ namespace hf {
         writePoses(md);
     }
 
-    // Once per step, so the row set can't change under the solver mid-step. A valved piston (one with a force cap)
-    // shuts once it reaches its target, or when it is saturated and the load is pushing it back: a check valve shuts
-    // against reverse flow, not against full pressure. The setpoint follows the target at the drive's speed, as
-    // commanded motion the velocity drive carries; whatever the target jumped beyond that is reached over later steps.
+    // Once per step, so the row set can't change under the solver mid-step. Positions are measured from the poses
+    // here, fresh: never from a trial pose of the line search.
+    //
+    // A held lever moves the target at its share of the drive's speed. Let go, target and setpoint park where the
+    // drive actually got to: a loaded ram trails its target, and finishing that travel after the key is up reads as
+    // the machine creeping on by itself.
+    //
+    // A valved drive (one with a force cap) shuts once it reaches its target, or when it is saturated and the load is
+    // pushing it back: a check valve shuts against reverse flow, not against full pressure. The setpoint follows the
+    // target at the drive's speed, as commanded motion the velocity drive carries; whatever the target jumped beyond
+    // that is reached over later steps.
     void World::Impl::beginDrives(double dt) {
         for (JointSlot &j : joints) {
             if (!j.alive) continue;
-            const JointDesc &d = j.desc;
-            if (d.type == JointType::Piston && std::isfinite(d.maxForce)) {
-                const double moved = j.slidePos - j.slidePrev;
-                j.slidePrev = j.slidePos;
-                if (std::fabs(d.target - j.slidePos) <= kDriveReached) j.commanded = false;
+            JointDesc &d = j.desc;
+            if (positionDrive(d.type)) {
+                j.positionPrev = j.position;
+                j.position = jointPosition(j);
+                if (j.lever != 0.0) {
+                    d.target = std::clamp(d.target + j.lever * d.speed * dt, d.min, d.max);
+                    j.commanded = true;
+                } else if (j.leverPrev != 0.0) {
+                    d.target = std::clamp(j.position, d.min, d.max);
+                    j.targetFrom = j.targetTo = j.targetEff = d.target;
+                    j.commanded = true;
+                }
+                j.leverPrev = j.lever;
+            }
+            if (positionDrive(d.type) && std::isfinite(d.maxForce)) {
+                const double moved = j.position - j.positionPrev;
+                if (std::fabs(d.target - j.position) <= kDriveReached) j.commanded = false;
                 const bool wasLocked = j.locked;
                 if (!j.commanded) j.locked = true;
-                else if (d.target > j.slidePos)
+                else if (d.target > j.position)
                     j.locked = j.driveSat >= 1.0 - kDriveSatSlack && moved < -kDriveBackstep;
                 else j.locked = j.driveSat <= -1.0 + kDriveSatSlack && moved > kDriveBackstep;
                 if (j.locked && !wasLocked) j.latchPending = true;

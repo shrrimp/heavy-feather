@@ -20,7 +20,8 @@ namespace hf {
         int treePriority(JointType t) {
             switch (t) {
                 case JointType::Piston: return 0;
-                case JointType::Motor: return 1;
+                case JointType::Motor:
+                case JointType::Servo: return 1;
                 case JointType::AngularSpring: return 2;
                 case JointType::Slider: return 3;
                 case JointType::Ball: return 4;
@@ -41,7 +42,8 @@ namespace hf {
         }
 
         bool revolute(JointType t) {
-            return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring;
+            return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring ||
+                   t == JointType::Servo;
         }
 
         std::size_t findRoot(std::vector<std::size_t> &uf, std::size_t x) {
@@ -53,7 +55,8 @@ namespace hf {
 
     bool kinematic(JointType t) {
         return t == JointType::Ball || t == JointType::Hinge || t == JointType::Motor ||
-               t == JointType::AngularSpring || t == JointType::Slider || t == JointType::Piston;
+               t == JointType::AngularSpring || t == JointType::Servo || t == JointType::Slider ||
+               t == JointType::Piston;
     }
 
     namespace {
@@ -299,6 +302,14 @@ namespace hf {
     } // namespace
 
     void World::Impl::buildMachines() {
+        carriedRows.clear();
+        for (const MachineData &md : machines) {
+            carriedRows.insert(carriedRows.end(), md.lastVel.begin(), md.lastVel.end());
+            carriedRows.insert(carriedRows.end(), md.lastPos.begin(), md.lastPos.end());
+        }
+        std::sort(carriedRows.begin(), carriedRows.end(),
+                  [](const auto &x, const auto &y) { return x.first < y.first; });
+        responses.clear(); // they name the machines about to go
         machines.clear();
         looseSprings.clear();
         for (Group &g : groups) g.machine = g.link = -1;
@@ -380,10 +391,11 @@ namespace hf {
 
     void World::Impl::writeVelocities(MachineData &md) {
         const Articulation &art = md.m.art;
+        art.twists(art.qdot.data(), md.twists);
         for (std::size_t l = 0; l < md.groupOfLink.size(); ++l) {
             Group &g = groups[std::size_t(md.groupOfLink[l])];
-            g.v = art.linkVelocity(int(l));
-            g.w = art.linkOmega(int(l));
+            g.v = pointVelocity(md.twists[l], art.links[l].c - art.O);
+            g.w = md.twists[l].w;
         }
     }
 
@@ -401,16 +413,18 @@ namespace hf {
     // back, and written back so the first contact refresh sees the pose the solver will.
     void World::Impl::readState(MachineData &md) {
         const std::size_t n = md.groupOfLink.size();
-        std::vector<Vec3> c(n), v(n), w(n);
-        std::vector<Quat> R(n);
+        md.c.resize(n);
+        md.R.resize(n);
+        md.v.resize(n);
+        md.w.resize(n);
         for (std::size_t i = 0; i < n; ++i) {
             const Group &g = groups[std::size_t(md.groupOfLink[i])];
-            c[i] = g.c;
-            R[i] = g.q;
-            v[i] = g.v;
-            w[i] = g.w;
+            md.c[i] = g.c;
+            md.R[i] = g.q;
+            md.v[i] = g.v;
+            md.w[i] = g.w;
         }
-        md.m.art.setFromMaximal(c, R, v, w);
+        md.m.art.setFromMaximal(md.c, md.R, md.v, md.w);
         writePoses(md);
     }
 

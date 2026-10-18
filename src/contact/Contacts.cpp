@@ -2,8 +2,10 @@
 #include <cmath>
 #include <cstdint>
 #include <numbers>
+#include <tuple>
 #include <vector>
 
+#include "math/Dense.hpp"
 #include "world/WorldImpl.hpp"
 
 namespace hf {
@@ -13,6 +15,7 @@ namespace hf {
         constexpr double kContactHertz = 120.0;
         constexpr double kContactDamping = 4.0; // a larger ratio makes the row stiffer: 4 is the quiet point
         constexpr double kSlop = 0.002;         // m of penetration left alone
+        constexpr double kGapReach = 2.0;       // a gap is solved once its approach could close it this many times over
         constexpr double kMaxBias = 3.0;        // m/s: the fastest penetration is pushed out
         constexpr double kRestitutionMinSpeed = 0.5;
         constexpr int kRestitutionIterations = 4;
@@ -21,9 +24,6 @@ namespace hf {
         constexpr int kProximalOuter = 4;
         constexpr int kRelaxIterations = 2;
         constexpr int kPositionIterations = 16;
-        // Two links of one machine its held rows lock together have ~0 relative mobility through W. Floored at this
-        // much of their unconstrained mobility, far below any real mass ratio, their contact stays finite.
-        constexpr double kLockedMobility = 1e-7;
 
         // A stable tangent pair for any unit normal; (n, t1, t2) is right-handed.
         void contactBasis(const Vec3 &n, Vec3 &t1, Vec3 &t2) {
@@ -51,9 +51,9 @@ namespace hf {
             g.c0 = g.c;
             g.q0 = g.q;
         }
-        std::vector<ContactData> kept;
-        kept.reserve(contacts.size());
-        for (ContactData &c : contacts) {
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < contacts.size(); ++i) {
+            ContactData &c = contacts[i];
             const BodySlot *a = body(c.in.a), *b = body(c.in.b);
             if (!a || !b || a->group == b->group) continue;
             const Group &ga = groups[std::size_t(a->group)], &gb = groups[std::size_t(b->group)];
@@ -65,107 +65,117 @@ namespace hf {
             c.depth0 = c.in.depth;
             c.n = c.in.normal;
             c.depth = c.in.depth;
-            const auto it = warm.find({c.in.a, c.in.b, c.in.feature});
-            c.ln = it != warm.end() ? it->second.first : 0.0;
-            c.lt1 = it != warm.end() ? it->second.second.x : 0.0;
-            c.lt2 = it != warm.end() ? it->second.second.y : 0.0;
+            // A gap starts cold: replaying an impulse across it would pull the pair together.
+            const WarmStart key{{c.in.a, c.in.b, c.in.feature}};
+            const auto it = std::lower_bound(warm.begin(), warm.end(), key);
+            const bool found = c.in.depth >= 0.0 && it != warm.end() && it->key == key.key;
+            c.ln = found ? it->ln : 0.0;
+            c.lt1 = found ? it->lt1 : 0.0;
+            c.lt2 = found ? it->lt2 : 0.0;
+            c.lr1 = found ? it->lr1 : 0.0;
+            c.lr2 = found ? it->lr2 : 0.0;
+            c.ls = found ? it->ls : 0.0;
             c.lnMax = 0.0;
             const Vec3 va = ga.v + cross(ga.w, c.rA), vb = gb.v + cross(gb.w, c.rB);
             c.vnImpact = dot(vb - va, c.n);
-            kept.push_back(c);
+            contacts[kept++] = c;
         }
-        contacts.swap(kept);
+        contacts.resize(kept);
 
         // Support travels one contact per iteration, so contacts are solved from the ground up: by how many contacts
-        // separate them from something static. Stable, so equal depths keep the host's order.
-        std::vector<int> depth(groups.size(), 1 << 30);
+        // separate them from something static. A counting sort, so equal depths keep the host's order.
+        groupDepth.assign(groups.size(), 1 << 30);
         for (std::size_t g = 0; g < groups.size(); ++g)
-            if (groups[g].isStatic) depth[g] = 0;
+            if (groups[g].isStatic) groupDepth[g] = 0;
         for (bool changed = true; changed;) {
             changed = false;
             for (const ContactData &c : contacts) {
-                const std::size_t a = std::size_t(c.ga), b = std::size_t(c.gb);
-                if (depth[a] > depth[b] + 1) {
-                    depth[a] = depth[b] + 1;
-                    changed = true;
-                }
-                if (depth[b] > depth[a] + 1) {
-                    depth[b] = depth[a] + 1;
-                    changed = true;
-                }
+                int &a = groupDepth[std::size_t(c.ga)], &b = groupDepth[std::size_t(c.gb)];
+                if (a > b + 1) a = b + 1, changed = true;
+                if (b > a + 1) b = a + 1, changed = true;
             }
         }
-        std::stable_sort(contacts.begin(), contacts.end(), [&](const ContactData &x, const ContactData &y) {
-            return std::min(depth[std::size_t(x.ga)], depth[std::size_t(x.gb)]) <
-                   std::min(depth[std::size_t(y.ga)], depth[std::size_t(y.gb)]);
-        });
+        const auto depthOf = [&](const ContactData &c) {
+            return std::size_t(
+                std::min({groupDepth[std::size_t(c.ga)], groupDepth[std::size_t(c.gb)], int(contacts.size())}));
+        };
+        depthStart.resize(contacts.size() + 2); // resized, not assigned: it grows geometrically
+        std::fill(depthStart.begin(), depthStart.end(), 0);
+        for (const ContactData &c : contacts) ++depthStart[depthOf(c) + 1];
+        for (std::size_t d = 1; d < depthStart.size(); ++d) depthStart[d] += depthStart[d - 1];
+        contactScratch.resize(contacts.size());
+        for (const ContactData &c : contacts) contactScratch[depthStart[depthOf(c)]++] = c;
+        contacts.swap(contactScratch);
     }
 
     // The warm start for the next step. Only this step's contacts are kept, so the cache can't grow.
     void World::Impl::storeContacts() {
         warm.clear();
-        for (const ContactData &c : contacts) warm[{c.in.a, c.in.b, c.in.feature}] = {c.ln, Vec3{c.lt1, c.lt2, 0.0}};
+        for (const ContactData &c : contacts)
+            warm.push_back({{c.in.a, c.in.b, c.in.feature}, c.ln, c.lt1, c.lt2, c.lr1, c.lr2, c.ls});
+        std::sort(warm.begin(), warm.end());
     }
 
     namespace {
 
-        // A machine end of a contact: its normal and tangent rows through the machine's mobility, and their effective
-        // inverse masses added to the row's. When both ends are links of the same machine, one block carries both.
-        void addMachineBlock(World::Impl &I, ContactPrep &p, const ContactData &c, int mi) {
-            MachineData &md = I.machines[std::size_t(mi)];
-            Machine &m = md.m;
-            const int n = m.dofs();
-            ContactBlock blk{mi, I.arena.size(), n};
-            I.arena.resize(blk.off + 6 * std::size_t(n), 0.0);
-            double *gn = I.arena.data() + blk.off, *gt1 = gn + n, *gt2 = gt1 + n;
-            double *wn = gt2 + n, *wt1 = wn + n, *wt2 = wt1 + n;
+        void apply(World::Impl &I, const ContactPrep &p, const ContactData &c, double ln, double lt1, double lt2);
 
+        // Angular impulses about t1, t2 (rolling) and n (spin) on both ends.
+        void applyTurn(World::Impl &I, const ContactPrep &p, double l1, double l2, double ls) {
+            Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
+            a.w -= l1 * p.imAr1 + l2 * p.imAr2 + ls * p.imAs;
+            b.w += l1 * p.imBr1 + l2 * p.imBr2 + ls * p.imBs;
+            const double l[6] = {0.0, 0.0, 0.0, l1, l2, ls};
+            machineImpulse(I, p, false, 6, l);
+        }
+
+        // ωB - ωA about t1, t2 and n.
+        Vec3 turnVelocity(World::Impl &I, const ContactPrep &p, const ContactData &c) {
             const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
-            // B's end with +, A's with -: the row's relative velocity is vB - vA.
-            if (b.machine == mi) {
-                const Vec3 at = b.c + p.r2;
-                m.art.addPointRow(b.link, at, c.n, 1.0, gn);
-                m.art.addPointRow(b.link, at, p.t1, 1.0, gt1);
-                m.art.addPointRow(b.link, at, p.t2, 1.0, gt2);
-            }
-            if (a.machine == mi) {
-                const Vec3 at = a.c + p.r1;
-                m.art.addPointRow(a.link, at, c.n, -1.0, gn);
-                m.art.addPointRow(a.link, at, p.t1, -1.0, gt1);
-                m.art.addPointRow(a.link, at, p.t2, -1.0, gt2);
-            }
-            m.mobility(gn, wn);
-            m.mobility(gt1, wt1);
-            m.mobility(gt2, wt2);
-            double kn = 0.0, k1 = 0.0, k2 = 0.0, k12 = 0.0;
-            for (int i = 0; i < n; ++i) {
-                kn += gn[i] * wn[i];
-                k1 += gt1[i] * wt1[i];
-                k2 += gt2[i] * wt2[i];
-                k12 += gt1[i] * wt2[i];
-            }
-            p.kn += std::max(kn, kLockedMobility * m.unconstrainedMobility(gn));
-            p.kt1 += std::max(k1, kLockedMobility * m.unconstrainedMobility(gt1));
-            p.kt2 += std::max(k2, kLockedMobility * m.unconstrainedMobility(gt2));
-            p.kt12 += k12;
-            p.blocks[p.nb++] = blk;
+            Vec3 w{};
+            if (b.machine < 0) w += b.w;
+            if (a.machine < 0) w -= a.w;
+            double m[6] = {};
+            machineVelocity(I, p, false, 6, m);
+            return {dot(w, p.t1) + m[3], dot(w, p.t2) + m[4], dot(w, c.n) + m[5]};
         }
 
     } // namespace
 
+    // The poses have moved since the host detected: the depth is re-derived, not re-detected. Each end moves with its
+    // body, turning to first order, and the normal holds, so a rolling contact stays on the ground.
+    double World::Impl::contactDepth(const ContactData &c) const {
+        const Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
+        const Vec3 da = a.c - a.c0 + cross(a.turned, c.rA);
+        const Vec3 db = b.c - b.c0 + cross(b.turned, c.rB);
+        return c.depth0 - dot(db - da, c.n);
+    }
+
+    void World::Impl::updateTurned() {
+        for (Group &g : groups) g.turned = rotationVectorOf(g.q * conjugate(g.q0));
+    }
+
     void World::Impl::prepareContacts() {
         prep.clear();
         arena.clear();
+        for (const LinkResponse &R : responses) machines[std::size_t(R.machine)].response[std::size_t(R.link)] = -1;
+        responses.clear();
+        responseArena.clear();
+        for (std::vector<LinkRun> &r : runs) r.assign(machines.size(), LinkRun{});
+        updateTurned();
         for (std::size_t ci = 0; ci < contacts.size(); ++ci) {
             ContactData &c = contacts[ci];
             Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
+            c.depth = contactDepth(c);
 
-            // The poses have moved since the host detected: the depth is re-derived, not re-detected. Each end moves
-            // with its body, turning to first order, and the normal holds, so a rolling contact stays on the ground.
-            const Vec3 da = a.c - a.c0 + cross(rotationVectorOf(a.q * conjugate(a.q0)), c.rA);
-            const Vec3 db = b.c - b.c0 + cross(rotationVectorOf(b.q * conjugate(b.q0)), c.rB);
-            c.depth = c.depth0 - dot(db - da, c.n);
-            if (c.depth < 0.0) continue; // a gap applies no force
+            // A gap is speculative: a rigid row that lets the pair close it within the sub-step and no faster, so a
+            // fast body stops on a surface instead of passing through it. One the pair isn't closing fast enough to
+            // reach this sub-step, with room to spare, could only solve to zero: the next sub-step looks again.
+            const bool gap = c.depth < 0.0;
+            if (gap && c.lnMax <= 0.0) {
+                const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
+                if (-dot(vb - va, c.n) * h * kGapReach < -c.depth) continue;
+            }
 
             ContactPrep p;
             p.contact = int(ci);
@@ -201,31 +211,30 @@ namespace hf {
             p.kt1 = p.imA + p.imB + dot(p.r1ct1, p.imR1ct1) + dot(p.r2ct1, p.imR2ct1);
             p.kt2 = p.imA + p.imB + dot(p.r1ct2, p.imR1ct2) + dot(p.r2ct2, p.imR2ct2);
             p.kt12 = dot(p.r1ct1, p.imR1ct2) + dot(p.r2ct1, p.imR2ct2);
-            p.soft = SoftParams::fromHertz(kContactHertz, kContactDamping, h);
-
-            const Vec3 P = c.ln * c.n + c.lt1 * p.t1 + c.lt2 * p.t2;
-            a.v -= p.imA * P;
-            a.w -= p.invIwA * cross(p.r1, P);
-            b.v += p.imB * P;
-            b.w += p.invIwB * cross(p.r2, P);
-
-            if (a.machine >= 0) addMachineBlock(*this, p, c, a.machine);
-            if (b.machine >= 0 && b.machine != a.machine) addMachineBlock(*this, p, c, b.machine);
-            for (int k = 0; k < p.nb; ++k) {
-                const ContactBlock &blk = p.blocks[k];
-                Machine &m = machines[std::size_t(blk.machine)].m;
-                const double *gn = arena.data() + blk.off;
-                const std::size_t n = std::size_t(blk.n);
-                m.applyContact(gn + 3 * n, c.ln);
-                m.applyContact(gn + 4 * n, c.lt1);
-                m.applyContact(gn + 5 * n, c.lt2);
+            p.turns = c.in.rolling > 0.0 || c.in.spinning > 0.0;
+            if (p.turns) {
+                p.imAr1 = p.invIwA * p.t1;
+                p.imAr2 = p.invIwA * p.t2;
+                p.imAs = p.invIwA * c.n;
+                p.imBr1 = p.invIwB * p.t1;
+                p.imBr2 = p.invIwB * p.t2;
+                p.imBs = p.invIwB * c.n;
+                p.kr1 = dot(p.t1, p.imAr1 + p.imBr1);
+                p.kr2 = dot(p.t2, p.imAr2 + p.imBr2);
+                p.ks = dot(c.n, p.imAs + p.imBs);
             }
+            p.soft = gap ? SoftParams::rigid() : SoftParams::fromHertz(kContactHertz, kContactDamping, h);
+
+            addMachineSides(*this, p, c);
+            apply(*this, p, c, c.ln, c.lt1, c.lt2);
+            if (p.turns) applyTurn(*this, p, c.lr1, c.lr2, c.ls);
 
             // Penetration is recovered in the position pass, where it moves the pose without leaving momentum.
-            p.vtarget = 0.0;
-            p.posBias = std::min(kMaxBias, p.soft.biasRate * std::max(0.0, c.depth - kSlop));
+            p.vtarget = gap ? c.depth / h : 0.0;
+            p.posBias = gap ? 0.0 : std::min(kMaxBias, p.soft.biasRate * std::max(0.0, c.depth - kSlop));
             prep.push_back(p);
         }
+        flushRuns(*this, false);
     }
 
     namespace {
@@ -236,27 +245,14 @@ namespace hf {
 
         // The relative velocity vB - vA at the contact: a rigid end from its group, a machine end from qdot (or its
         // pseudo-velocity, in the position pass) through its rows.
-        RowVelocity rowVelocity(const World::Impl &I, const ContactPrep &p, const ContactData &c, bool pseudo) {
+        RowVelocity rowVelocity(World::Impl &I, const ContactPrep &p, const ContactData &c, bool pseudo) {
             const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
             Vec3 vrel{};
             if (b.machine < 0) vrel += pseudo ? b.pv + cross(b.pw, p.r2) : b.v + cross(b.w, p.r2);
             if (a.machine < 0) vrel -= pseudo ? a.pv + cross(a.pw, p.r1) : a.v + cross(a.w, p.r1);
-            RowVelocity v{dot(vrel, c.n), dot(vrel, p.t1), dot(vrel, p.t2)};
-            for (int k = 0; k < p.nb; ++k) {
-                const ContactBlock &blk = p.blocks[k];
-                const Machine &m = I.machines[std::size_t(blk.machine)].m;
-                const double *gn = I.arena.data() + blk.off;
-                const std::size_t n = std::size_t(blk.n);
-                const std::vector<double> &qd = pseudo ? m.pseudo() : m.art.qdot;
-                for (std::size_t i = 0; i < n; ++i) {
-                    v.n += gn[i] * qd[i];
-                    if (!pseudo) {
-                        v.t1 += gn[n + i] * qd[i];
-                        v.t2 += gn[2 * n + i] * qd[i];
-                    }
-                }
-            }
-            return v;
+            double m[3] = {};
+            machineVelocity(I, p, pseudo, pseudo ? 1 : 3, m);
+            return {dot(vrel, c.n) + m[0], dot(vrel, p.t1) + m[1], dot(vrel, p.t2) + m[2]};
         }
 
         void apply(World::Impl &I, const ContactPrep &p, const ContactData &c, double ln, double lt1, double lt2) {
@@ -270,22 +266,15 @@ namespace hf {
             a.w -= lt1 * p.imR1ct1 + lt2 * p.imR1ct2;
             b.v += p.imB * Pt;
             b.w += lt1 * p.imR2ct1 + lt2 * p.imR2ct2;
-            for (int k = 0; k < p.nb; ++k) {
-                const ContactBlock &blk = p.blocks[k];
-                Machine &m = I.machines[std::size_t(blk.machine)].m;
-                const double *gn = I.arena.data() + blk.off;
-                const std::size_t n = std::size_t(blk.n);
-                if (ln != 0.0) m.applyContact(gn + 3 * n, ln);
-                if (lt1 != 0.0) m.applyContact(gn + 4 * n, lt1);
-                if (lt2 != 0.0) m.applyContact(gn + 5 * n, lt2);
-            }
+            const double l[3] = {ln, lt1, lt2};
+            machineImpulse(I, p, false, 3, l);
         }
 
         // The friction pair's new accumulated impulse, clamped to the cone. With a machine end the 2×2 block is solved
         // exactly: a wheel's mobility lies along its rolling direction, and a row-by-row step diverges on it.
         void frictionStep(const ContactPrep &p, const RowVelocity &v, double maxT, double &lt1, double &lt2) {
             double d1 = -v.t1 / p.kt1, d2 = -v.t2 / p.kt2;
-            if (p.nb > 0) {
+            if (p.ns > 0) {
                 const double a = p.kt1, b = p.kt12, d = p.kt2;
                 const double det = a * d - b * b;
                 if (det > 1e-12 * a * d) {
@@ -303,10 +292,27 @@ namespace hf {
         }
 
         // One pass over a contact: soft when biased, the pure non-penetration row when relaxing.
+        // Rolling and spin, resisted by up to their lever arm times the normal force, once the linear rows are done.
+        void turnStep(World::Impl &I, const ContactPrep &p, ContactData &c, double ln) {
+            const Vec3 w = turnVelocity(I, p, c);
+            double l1 = p.kr1 > 0.0 ? c.lr1 - w.x / p.kr1 : 0.0, l2 = p.kr2 > 0.0 ? c.lr2 - w.y / p.kr2 : 0.0;
+            const double maxR = c.in.rolling * ln, len = std::sqrt(l1 * l1 + l2 * l2);
+            if (len > maxR) {
+                l1 = len > 0.0 ? l1 * maxR / len : 0.0;
+                l2 = len > 0.0 ? l2 * maxR / len : 0.0;
+            }
+            const double maxS = c.in.spinning * ln;
+            const double ls = p.ks > 0.0 ? std::clamp(c.ls - w.z / p.ks, -maxS, maxS) : 0.0;
+            applyTurn(I, p, l1 - c.lr1, l2 - c.lr2, ls - c.ls);
+            c.lr1 = l1;
+            c.lr2 = l2;
+            c.ls = ls;
+        }
+
         void sweepContact(World::Impl &I, ContactPrep &p, bool relax) {
             ContactData &c = I.contacts[std::size_t(p.contact)];
             const RowVelocity v = rowVelocity(I, p, c, false);
-            const double lnn = relax ? std::max(0.0, c.ln - v.n / p.kn)
+            const double lnn = relax ? std::max(0.0, c.ln + (p.vtarget - v.n) / p.kn)
                                      : std::max(0.0, c.ln + p.soft.massCoeff * (p.vtarget - v.n) / p.kn -
                                                          p.soft.impulseCoeff * (c.ln - p.refLn));
             double lt1 = c.lt1, lt2 = c.lt2;
@@ -317,6 +323,7 @@ namespace hf {
             c.lt1 = lt1;
             c.lt2 = lt2;
             apply(I, p, c, dn, d1, d2);
+            if (p.turns) turnStep(I, p, c, lnn);
         }
 
         void sweepBounded(World::Impl &I) {
@@ -357,10 +364,8 @@ namespace hf {
                 double *g = arena.data() + blk.off, *w = g + n;
                 if (a.machine == mi) m.art.addPointRow(a.link, pA, sp.n, 1.0, g);
                 if (b.machine == mi) m.art.addPointRow(b.link, pB, sp.n, -1.0, g);
-                m.mobility(g, w);
-                double k = 0.0;
-                for (int i = 0; i < n; ++i) k += g[i] * w[i];
-                sp.k += std::max(k, kLockedMobility * m.unconstrainedMobility(g));
+                const double unheld = m.mobility(g, w);
+                sp.k += std::max(dot(g, w, std::size_t(n)), kLockedMobility * unheld);
                 sp.blocks[sp.nb++] = blk;
             }
             springRow(sp.k, d.hertz, d.damping, len - d.restLength, h, sp.gamma, sp.target);
@@ -378,8 +383,7 @@ namespace hf {
             for (int k = 0; k < sp.nb; ++k) {
                 const ContactBlock &blk = sp.blocks[k];
                 const std::vector<double> &qd = I.machines[std::size_t(blk.machine)].m.art.qdot;
-                const double *g = I.arena.data() + blk.off;
-                for (std::size_t i = 0; i < std::size_t(blk.n); ++i) v += g[i] * qd[i];
+                v += dot(I.arena.data() + blk.off, qd.data(), std::size_t(blk.n));
             }
             const double dl = (sp.target - v - sp.gamma * sp.lambda) / (sp.k + sp.gamma);
             sp.lambda += dl;
@@ -406,6 +410,7 @@ namespace hf {
             for (int k = 0; k < inner; ++k) {
                 for (SpringPrep &sp : springs) sweepSpring(*this, sp);
                 for (ContactPrep &p : prep) sweepContact(*this, p, false);
+                flushRuns(*this, false);
                 sweepBounded(*this);
             }
         }
@@ -414,8 +419,15 @@ namespace hf {
     // After the integration, and nothing is integrated from it: drains the separating velocity the bias added, and
     // leaves impulses the next warm start can trust.
     void World::Impl::relaxContacts() {
+        // A gap keeps what is left of it after the integration; anything touching is held to no approach at all.
+        updateTurned();
+        for (ContactPrep &p : prep) {
+            const ContactData &c = contacts[std::size_t(p.contact)];
+            p.vtarget = std::min(0.0, contactDepth(c)) / h;
+        }
         for (int k = 0; k < kRelaxIterations; ++k) {
             for (ContactPrep &p : prep) sweepContact(*this, p, true);
+            flushRuns(*this, false);
             sweepBounded(*this);
         }
     }
@@ -434,12 +446,9 @@ namespace hf {
                 a.pw -= app * p.imR1cn;
                 b.pv += p.imB * app * c.n;
                 b.pw += app * p.imR2cn;
-                for (int i = 0; i < p.nb; ++i) {
-                    const ContactBlock &blk = p.blocks[i];
-                    machines[std::size_t(blk.machine)].m.applyPseudo(arena.data() + blk.off + 3 * std::size_t(blk.n),
-                                                                     app);
-                }
+                machineImpulse(*this, p, true, 1, &app);
             }
+        flushRuns(*this, true);
     }
 
     // Once per step, after every sub-step: a bounce is a property of the impact, solved against the speed the pair
@@ -455,6 +464,7 @@ namespace hf {
                 c.ln = lnn;
                 apply(*this, p, c, dn, 0.0, 0.0);
             }
+        flushRuns(*this, false);
     }
 
 } // namespace hf

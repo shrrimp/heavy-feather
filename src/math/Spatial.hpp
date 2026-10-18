@@ -52,6 +52,9 @@ namespace hf {
         return {cross(a.w, f.n) + cross(a.v, f.f), cross(a.w, f.f)};
     }
 
+    // [v]×, the matrix of v × ·, by columns.
+    inline Mat3 skew(const Vec3 &v) { return {Vec3{0.0, v.z, -v.y}, Vec3{-v.z, 0.0, v.x}, Vec3{v.y, -v.x, 0.0}}; }
+
     // Velocity of the material point at x (relative to O) on a body moving with twist V.
     inline Vec3 pointVelocity(const Motion &V, const Vec3 &x) { return V.v + cross(V.w, x); }
 
@@ -81,6 +84,38 @@ namespace hf {
             h += o.h;
             I = I + o.I;
             return *this;
+        }
+    };
+
+    inline double component(const Motion &m, int i) { return i < 3 ? m.w[i] : m.v[i - 3]; }
+    inline double component(const Force &f, int i) { return i < 3 ? f.n[i] : f.f[i - 3]; }
+
+    // An articulated-body inertia: a symmetric 6×6 from twists (w, v) to wrenches (n, f), about O.
+    struct ArticulatedInertia {
+        double a[6][6] = {};
+
+        static ArticulatedInertia of(const Inertia &I) {
+            ArticulatedInertia r;
+            const Vec3 &h = I.h;
+            const double hx[3][3] = {{0, -h.z, h.y}, {h.z, 0, -h.x}, {-h.y, h.x, 0}};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    r.a[i][j] = I.I[j][i];
+                    r.a[i][3 + j] = hx[i][j];
+                    r.a[3 + i][j] = -hx[i][j];
+                }
+            for (int i = 0; i < 3; ++i) r.a[3 + i][3 + i] = I.m;
+            return r;
+        }
+
+        Force operator*(const Motion &x) const {
+            double out[6];
+            for (int i = 0; i < 6; ++i) {
+                double s = 0.0;
+                for (int j = 0; j < 6; ++j) s += a[i][j] * component(x, j);
+                out[i] = s;
+            }
+            return {Vec3{out[0], out[1], out[2]}, Vec3{out[3], out[4], out[5]}};
         }
     };
 

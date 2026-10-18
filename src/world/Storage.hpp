@@ -29,13 +29,21 @@ namespace hf {
         bool alive = false;
         JointInfo info;
 
-        // Drive state, carried across steps. A piston's setpoint follows its target at the drive's speed: it moves
-        // from targetFrom to targetTo over a step, targetEff along the way.
+        // Drive state, carried across steps. A position drive's setpoint follows its target at the drive's speed: it
+        // moves from targetFrom to targetTo over a step, targetEff along the way.
         double targetFrom = 0.0, targetTo = 0.0, targetRate = 0.0, targetEff = 0.0;
         double lambda = 0.0; // the drive row's last impulse
-        double slidePos = 0.0, slidePrev = 0.0, holdPos = 0.0, driveSat = 0.0;
+        // Where the drive was as this step and the last began, measured from the poses.
+        double position = 0.0, positionPrev = 0.0;
+        double holdPos = 0.0, driveSat = 0.0;
+        double lever = 0.0, leverPrev = 0.0;
         bool locked = false, latchPending = true, commanded = true;
     };
+
+    // A piston or a servo: a drive toward a position, with a valve.
+    inline bool positionDrive(JointType t) { return t == JointType::Piston || t == JointType::Servo; }
+    // m or rad: within this of its target a position drive only nudges itself back; beyond, it travels at its speed.
+    constexpr double kServoDeadband = 1e-3;
 
     // What the solver moves: one body, or a weld group moving as one. Group 0 is the static world.
     struct Group {
@@ -43,9 +51,10 @@ namespace hf {
         Quat q{};
         Vec3 c0{}; // c and q as the step began
         Quat q0{};
+        Vec3 turned{}; // the rotation since then, as a rotation vector: refreshed with the contacts' depths
         Vec3 v{}, w{};
         double invMass = 0.0;
-        Mat3 invInertiaBody{};
+        Mat3 inertiaBody{}, invInertiaBody{};
         double radius = 0.0;
         bool isStatic = true;
 

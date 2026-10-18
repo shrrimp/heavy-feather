@@ -16,9 +16,13 @@ mass of everything attached to it.
 ## The systems
 
 - **Math**: vectors, quaternions and spatial algebra, all in double precision.
-- **Dynamics**: articulations, and the algorithms that move them.
-- **Solver**: each machine's loops, drives, limits and springs.
-- **Contacts**: contacts and friction, solved through the machines they touch.
+- **Dynamics**: articulations, and the algorithms that move them. Small machines go through their
+  mass matrix; large ones through the articulated-body recursion, in time linear in their size.
+- **Solver**: each machine's loops, drives, limits and springs. Pistons and servos hold like
+  hydraulics: rigid once their valve shuts, and a released lever stops them where they are.
+- **Contacts**: contacts, friction, and resistance to rolling and spinning, solved through the
+  machines they touch. A contact reported before it touches is speculative, so a fast body stops
+  on a surface instead of passing through it.
 - **World**: what the host talks to. It takes bodies, joints and contacts, works out the
   machines, and steps them.
 

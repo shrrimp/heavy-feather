@@ -44,49 +44,62 @@ namespace hf {
 
     } // namespace
 
-    void Machine::dynamics(double h, const Vec3 &gravity, const std::vector<Force> &fext,
-                           const std::vector<double> &jointDiag) {
+    void Machine::dynamics(double h, const Vec3 &gravity, const std::vector<Force> &fext) {
         n_ = art.dofs();
         const std::size_t n = std::size_t(n_);
         art.updateKinematics(art.links.empty() ? Vec3{} : art.links[0].c);
-        art.massMatrix(M_);
-        for (std::size_t i = 0; i < jointDiag.size() && i < n; ++i) M_[i * n + i] += jointDiag[i];
-
-        L_ = M_;
         stats = MachineStats{};
-        stats.pivotsRaised = choleskyFactor(L_.data(), n_, n_);
-
-        Minv_.assign(n * n, 0.0);
-        tmp_.assign(n, 0.0);
-        for (std::size_t c = 0; c < n; ++c) {
-            std::fill(tmp_.begin(), tmp_.end(), 0.0);
-            tmp_[c] = 1.0;
-            choleskySolve(L_.data(), n_, n_, tmp_.data());
-            for (std::size_t r = 0; r < n; ++r) Minv_[r * n + c] = tmp_[r];
+        dense_ = n_ <= denseDofs;
+        if (dense_) {
+            art.massMatrix(M_);
+            diagM_.resize(n);
+            for (std::size_t i = 0; i < n; ++i) diagM_[i] = M_[i * n + i];
+            L_ = M_;
+            stats.pivotsRaised = choleskyFactor(L_.data(), n_, n_);
+        } else {
+            art.factorMass();
+            art.massDiagonal(diagM_);
         }
 
-        art.biasForces(gravity, fext, C_);
-        for (std::size_t i = 0; i < n; ++i) tmp_[i] = -C_[i];
-        choleskySolve(L_.data(), n_, n_, tmp_.data());
-        qdotFree_.resize(n);
-        for (std::size_t i = 0; i < n; ++i) qdotFree_[i] = art.qdot[i] + h * tmp_[i];
+        // The velocity terms at the sub-step's midpoint velocity, found by a few fixed-point passes: taken at the start
+        // (explicit), a thin link spinning about its own axis gains energy every step until it explodes.
+        const std::vector<double> &qd0 = art.qdot;
+        qdotFree_ = qd0;
+        qdotMid_.resize(n);
+        tmp_.resize(n);
+        for (int pass = 0; pass < kMidpointPasses; ++pass) {
+            for (std::size_t i = 0; i < n; ++i) qdotMid_[i] = 0.5 * (qd0[i] + qdotFree_[i]);
+            art.updateVelocities(qdotMid_.data());
+            art.biasForces(gravity, fext, C_);
+            for (std::size_t i = 0; i < n; ++i) tmp_[i] = -C_[i];
+            solveMass(tmp_.data());
+            for (std::size_t i = 0; i < n; ++i) qdotFree_[i] = qd0[i] + h * tmp_[i];
+        }
         art.qdot = qdotFree_;
+        art.updateVelocities(art.qdot.data());
 
         pqdot_.assign(n, 0.0);
         clearRows();
         clearPosRows();
     }
 
+    void Machine::solveMass(double *x) const {
+        if (dense_) choleskySolve(L_.data(), n_, n_, x);
+        else art.solveMass(x);
+    }
+
+    // Each row's M⁻¹ Jᵀ.
+    void Machine::solveRowsOf(const std::vector<double> &J, std::size_t m, std::vector<double> &Y) const {
+        const std::size_t n = std::size_t(n_);
+        Y.assign(J.begin(), J.begin() + std::ptrdiff_t(m * n));
+        for (std::size_t i = 0; i < m; ++i) solveMass(Y.data() + i * n);
+    }
+
     double Machine::inverseMassAlong(const double *J) const {
         const std::size_t n = std::size_t(n_);
-        double s = 0.0;
-        for (std::size_t r = 0; r < n; ++r) {
-            if (J[r] == 0.0) continue;
-            double t = 0.0;
-            for (std::size_t c = 0; c < n; ++c) t += Minv_[r * n + c] * J[c];
-            s += J[r] * t;
-        }
-        return s;
+        tmp_.assign(J, J + n);
+        solveMass(tmp_.data());
+        return dot(J, tmp_.data(), n);
     }
 
     void Machine::clearRows() {
@@ -103,24 +116,13 @@ namespace hf {
     void Machine::prepareRows() {
         const std::size_t n = std::size_t(n_), m = rows_.size();
         stats.rows = int(m);
-        Y_.assign(m * n, 0.0);
-        for (std::size_t i = 0; i < m; ++i) {
-            const double *Ji = J_.data() + i * n;
-            double *Yi = Y_.data() + i * n;
-            for (std::size_t c = 0; c < n; ++c) {
-                const double jc = Ji[c];
-                if (jc == 0.0) continue;
-                for (std::size_t r = 0; r < n; ++r) Yi[r] += Minv_[r * n + c] * jc;
-            }
-        }
+        solveRowsOf(J_, m, Y_);
         A_.assign(m * m, 0.0);
         diag_.assign(m, 0.0);
         for (std::size_t i = 0; i < m; ++i) {
             const double *Ji = J_.data() + i * n;
             for (std::size_t j = i; j < m; ++j) {
-                const double *Yj = Y_.data() + j * n;
-                double s = 0.0;
-                for (std::size_t c = 0; c < n; ++c) s += Ji[c] * Yj[c];
+                const double s = dot(Ji, Y_.data() + j * n, n);
                 A_[i * m + j] = s;
                 A_[j * m + i] = s;
             }
@@ -151,7 +153,7 @@ namespace hf {
         for (std::size_t i = 0; i < m; ++i) {
             const double *Ji = J.data() + i * n;
             for (std::size_t c = 0; c < n; ++c)
-                if (Ji[c] != 0.0) jac_[i] += Ji[c] * Ji[c] / std::max(M_[c * n + c], 1e-300);
+                if (Ji[c] != 0.0) jac_[i] += Ji[c] * Ji[c] / std::max(diagM_[c], 1e-300);
             jacMax = std::max(jacMax, jac_[i]);
         }
         dead.assign(m, 0);
@@ -212,9 +214,7 @@ namespace hf {
         lo_.resize(m);
         hi_.resize(m);
         for (std::size_t i = 0; i < m; ++i) {
-            const double *Ji = J_.data() + i * n;
-            double s = 0.0;
-            for (std::size_t c = 0; c < n; ++c) s += Ji[c] * base[c];
+            const double s = dot(J_.data() + i * n, base.data(), n);
             b_[i] = dead_[i] ? 0.0 : s - rows_[i].target;
             lo_[i] = rows_[i].lo;
             hi_[i] = rows_[i].hi;
@@ -240,55 +240,95 @@ namespace hf {
     }
 
     void Machine::buildMobility() {
-        const std::size_t n = std::size_t(n_), m = rows_.size();
-        W_ = Minv_;
-
+        const std::size_t m = rows_.size();
         // Equality rows only. Holding a bounded row here would let the contacts lean on a drive that the next
         // solve finds past its cap: the forklift's braked wheels, released, spun backwards at 90 rad/s.
         freeIdx_.clear();
         for (std::size_t i = 0; i < m; ++i)
             if (std::isinf(rows_[i].lo) && std::isinf(rows_[i].hi)) freeIdx_.push_back(int(i));
         const std::size_t k = freeIdx_.size();
-        if (k == 0) return;
-
         Aff_.resize(k * k);
         for (std::size_t p = 0; p < k; ++p)
             for (std::size_t q = 0; q < k; ++q)
                 Aff_[p * k + q] = A_[std::size_t(freeIdx_[p]) * m + std::size_t(freeIdx_[q])];
-        choleskyFactor(Aff_.data(), int(k), int(k));
-        tmp_.resize(k);
-        for (std::size_t c = 0; c < n; ++c) {
-            for (std::size_t p = 0; p < k; ++p) tmp_[p] = Y_[std::size_t(freeIdx_[p]) * n + c];
-            choleskySolve(Aff_.data(), int(k), int(k), tmp_.data());
-            for (std::size_t p = 0; p < k; ++p) {
-                const double z = tmp_[p];
-                if (z == 0.0) continue;
-                const double *Yp = Y_.data() + std::size_t(freeIdx_[p]) * n;
-                for (std::size_t r = 0; r < n; ++r) W_[r * n + c] -= Yp[r] * z;
-            }
-        }
-
-        // W is symmetric in exact arithmetic; a contact's effective mass g W g must not depend on rounding.
-        for (std::size_t r = 0; r < n; ++r)
-            for (std::size_t c = r + 1; c < n; ++c) {
-                const double a = 0.5 * (W_[r * n + c] + W_[c * n + r]);
-                W_[r * n + c] = a;
-                W_[c * n + r] = a;
-            }
+        if (k) choleskyFactor(Aff_.data(), int(k), int(k));
     }
 
-    void Machine::mobility(const double *g, double *w) const {
+    // W g = M⁻¹ g − Yᵀ A⁻¹ (J M⁻¹ g) over the held rows.
+    double Machine::mobility(const double *g, double *w) const {
         const std::size_t n = std::size_t(n_);
-        std::fill(w, w + n, 0.0);
-        for (std::size_t c = 0; c < n; ++c) {
-            const double gc = g[c];
-            if (gc == 0.0) continue;
-            for (std::size_t r = 0; r < n; ++r) w[r] += W_[r * n + c] * gc;
+        std::copy(g, g + n, w);
+        solveMass(w);
+        const double unconstrained = dot(g, w, n);
+        holdRows(w);
+        return unconstrained;
+    }
+
+    // M⁻¹ Jᵀ f for the six wrenches at a link: only the link's path is climbed on the way in.
+    void Machine::solveAtLink(int link, const Force *f, double *w) const {
+        const std::size_t n = std::size_t(n_);
+        if (!dense_) {
+            art.solveAt(link, f, 3, w);
+            art.solveAt(link, f + 3, 3, w + 3 * n);
+            return;
+        }
+        for (int c = 0; c < 6; ++c) {
+            double *wc = w + std::size_t(c) * n;
+            std::fill(wc, wc + n, 0.0);
+            for (int j = link; j >= 0; j = art.links[std::size_t(j)].parent) {
+                const Link &L = art.links[std::size_t(j)];
+                for (int a = 0; a < L.ndof; ++a) wc[L.dof0 + a] += dot(L.S[a], f[c]);
+            }
+            solveMass(wc);
+        }
+    }
+
+    void Machine::linkResponse(int link, double *Z, double held[6][6], double unheld[6][6]) const {
+        const std::size_t n = std::size_t(n_);
+        const Force unit[6] = {{Vec3{1, 0, 0}, {}}, {Vec3{0, 1, 0}, {}}, {Vec3{0, 0, 1}, {}},
+                               {{}, Vec3{1, 0, 0}}, {{}, Vec3{0, 1, 0}}, {{}, Vec3{0, 0, 1}}};
+        // The unheld response first: the link's own twist from it gives the 6×6.
+        solveAtLink(link, unit, Z);
+        for (int c = 0; c < 6; ++c) {
+            const Motion t = art.twistOf(link, Z + std::size_t(c) * n);
+            for (int r = 0; r < 6; ++r) unheld[r][c] = component(t, r);
+        }
+        for (int c = 0; c < 6; ++c) {
+            holdRows(Z + std::size_t(c) * n);
+            const Motion t = art.twistOf(link, Z + std::size_t(c) * n);
+            for (int r = 0; r < 6; ++r) held[r][c] = component(t, r);
+        }
+    }
+
+    void Machine::holdRows(double *w) const {
+        const std::size_t n = std::size_t(n_), k = freeIdx_.size();
+        if (k == 0) return;
+        free_.resize(k);
+        for (std::size_t p = 0; p < k; ++p) {
+            free_[p] = dot(J_.data() + std::size_t(freeIdx_[p]) * n, w, n);
+        }
+        choleskySolve(Aff_.data(), int(k), int(k), free_.data());
+        for (std::size_t p = 0; p < k; ++p) {
+            const double z = free_[p];
+            if (z == 0.0) continue;
+            const double *Yp = Y_.data() + std::size_t(freeIdx_[p]) * n;
+            for (std::size_t r = 0; r < n; ++r) w[r] -= z * Yp[r];
         }
     }
 
     void Machine::applyContact(const double *w, double mu) {
         for (std::size_t i = 0; i < std::size_t(n_); ++i) art.qdot[i] += mu * w[i];
+    }
+
+    void Machine::applyWrench(const double *Z, const Force &f, bool pseudo) {
+        std::vector<double> &x = pseudo ? pqdot_ : art.qdot;
+        const std::size_t n = std::size_t(n_);
+        for (int c = 0; c < 6; ++c) {
+            const double s = component(f, c);
+            if (s == 0.0) continue;
+            const double *Zc = Z + std::size_t(c) * n;
+            for (std::size_t i = 0; i < n; ++i) x[i] += s * Zc[i];
+        }
     }
 
     void Machine::prepareBounded() {
@@ -303,8 +343,7 @@ namespace hf {
             const double *Ji = J_.data() + i * n;
             double *w = bW_.data() + b * n;
             mobility(Ji, w);
-            double k = 0.0;
-            for (std::size_t c = 0; c < n; ++c) k += Ji[c] * w[c];
+            double k = dot(Ji, w, n);
             k += rows_[i].compliance + std::max(rows_[i].relEps * diag_[i], 1e-300);
             bK_[b] = k;
         }
@@ -316,8 +355,7 @@ namespace hf {
             const std::size_t i = std::size_t(bIdx_[b]);
             const MachineRow &r = rows_[i];
             const double *Ji = J_.data() + i * n;
-            double v = 0.0;
-            for (std::size_t c = 0; c < n; ++c) v += Ji[c] * art.qdot[c];
+            const double v = dot(Ji, art.qdot.data(), n);
             const double old = lambda_[i];
             const double nl = std::clamp(old - (v - r.target + r.compliance * old) / bK_[b], r.lo, r.hi);
             const double d = nl - old;
@@ -345,16 +383,7 @@ namespace hf {
         BoxLcpStats st;
         if (m == 0) return st;
 
-        posY_.assign(m * n, 0.0);
-        for (std::size_t i = 0; i < m; ++i) {
-            const double *Ji = posJ_.data() + i * n;
-            double *Yi = posY_.data() + i * n;
-            for (std::size_t c = 0; c < n; ++c) {
-                const double jc = Ji[c];
-                if (jc == 0.0) continue;
-                for (std::size_t r = 0; r < n; ++r) Yi[r] += Minv_[r * n + c] * jc;
-            }
-        }
+        solveRowsOf(posJ_, m, posY_);
         posA_.assign(m * m, 0.0);
         posB_.resize(m);
         posLo_.resize(m);
@@ -362,15 +391,11 @@ namespace hf {
         for (std::size_t i = 0; i < m; ++i) {
             const double *Ji = posJ_.data() + i * n;
             for (std::size_t j = i; j < m; ++j) {
-                const double *Yj = posY_.data() + j * n;
-                double s = 0.0;
-                for (std::size_t c = 0; c < n; ++c) s += Ji[c] * Yj[c];
+                const double s = dot(Ji, posY_.data() + j * n, n);
                 posA_[i * m + j] = s;
                 posA_[j * m + i] = s;
             }
-            double s = 0.0;
-            for (std::size_t c = 0; c < n; ++c) s += Ji[c] * pqdot_[c];
-            posB_[i] = s - posRows_[i].target;
+            posB_[i] = dot(Ji, pqdot_.data(), n) - posRows_[i].target;
             posLo_[i] = posRows_[i].lo;
             posHi_[i] = posRows_[i].hi;
         }
@@ -392,10 +417,6 @@ namespace hf {
         stats.lcpPivots += st.pivots;
         stats.lcpFallbacks += st.fallback ? 1 : 0;
         return st;
-    }
-
-    void Machine::applyPseudo(const double *w, double mu) {
-        for (std::size_t i = 0; i < std::size_t(n_); ++i) pqdot_[i] += mu * w[i];
     }
 
     void Machine::integrate(double h) {

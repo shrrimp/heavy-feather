@@ -1,7 +1,10 @@
 #include "dynamics/Articulation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+
+#include "math/Dense.hpp"
 
 namespace hf {
 
@@ -161,8 +164,6 @@ namespace hf {
 
         for (std::size_t i = 0; i < links.size(); ++i) {
             Link &L = links[i];
-            const Motion Vp = L.parent >= 0 ? links[std::size_t(L.parent)].V : Motion{};
-            const Motion Ap = L.parent >= 0 ? links[std::size_t(L.parent)].A : Motion{};
             switch (L.kind) {
                 case JointKind::Free:
                     for (int k = 0; k < 3; ++k) {
@@ -191,17 +192,25 @@ namespace hf {
                     break;
                 }
             }
-            Motion vj{};
-            for (int k = 0; k < L.ndof; ++k) vj += qdot[std::size_t(L.dof0 + k)] * L.S[k];
-            L.V = Vp + vj;
-            // S rides on the parent, so dS/dt = Vp × S and the joint adds Vp × (S qdot).
-            L.A = Ap + crossM(Vp, vj);
             L.I = Inertia::body(L.mass, L.c - O, worldInertia(L.R, L.inertiaBody));
         }
+        updateVelocities(qdot.data());
 
         for (Link &L : links) L.Ic = L.I;
         for (std::size_t i = links.size(); i-- > 0;)
             if (links[i].parent >= 0) links[std::size_t(links[i].parent)].Ic += links[i].Ic;
+    }
+
+    void Articulation::updateVelocities(const double *qd) {
+        for (Link &L : links) {
+            const Motion Vp = L.parent >= 0 ? links[std::size_t(L.parent)].V : Motion{};
+            const Motion Ap = L.parent >= 0 ? links[std::size_t(L.parent)].A : Motion{};
+            Motion vj{};
+            for (int k = 0; k < L.ndof; ++k) vj += qd[L.dof0 + k] * L.S[k];
+            L.V = Vp + vj;
+            // S rides on the parent, so dS/dt = Vp × S and the joint adds Vp × (S qdot).
+            L.A = Ap + crossM(Vp, vj);
+        }
     }
 
     void Articulation::massMatrix(std::vector<double> &M) const {
@@ -240,6 +249,130 @@ namespace hf {
         }
     }
 
+    void Articulation::massDiagonal(std::vector<double> &d) const {
+        d.assign(std::size_t(ndof_), 0.0);
+        for (const Link &L : links)
+            for (int a = 0; a < L.ndof; ++a) d[std::size_t(L.dof0 + a)] = dot(L.S[a], L.Ic * L.S[a]);
+    }
+
+    // Leaves first: each link's articulated inertia is its own plus what its children pass up once their joints are
+    // free to move. A pivot that has vanished pins its joint, as the dense Cholesky does.
+    void Articulation::factorMass() {
+        const std::size_t n = links.size();
+        factor_.resize(n);
+        for (std::size_t i = 0; i < n; ++i) factor_[i].IA = ArticulatedInertia::of(links[i].I);
+        for (std::size_t i = n; i-- > 0;) {
+            const Link &L = links[i];
+            Factor &F = factor_[i];
+            const int k = L.ndof;
+            double D[36];
+            for (int a = 0; a < k; ++a) F.U[a] = F.IA * L.S[a];
+            for (int a = 0; a < k; ++a)
+                for (int b = 0; b < k; ++b) D[a * k + b] = dot(L.S[a], F.U[b]);
+            choleskyFactor(D, k, k);
+            for (int c = 0; c < k; ++c) {
+                double col[6] = {};
+                col[c] = 1.0;
+                choleskySolve(D, k, k, col);
+                for (int r = 0; r < k; ++r) F.Dinv[r][c] = col[r];
+            }
+            if (L.parent < 0) continue;
+            ArticulatedInertia &P = factor_[std::size_t(L.parent)].IA;
+            for (int r = 0; r < 6; ++r)
+                for (int c = 0; c < 6; ++c) {
+                    double s = F.IA.a[r][c];
+                    for (int a = 0; a < k; ++a)
+                        for (int b = 0; b < k; ++b) s -= component(F.U[a], r) * F.Dinv[a][b] * component(F.U[b], c);
+                    P.a[r][c] += s;
+                }
+        }
+    }
+
+    // ABA with no velocity and no gravity: the inward pass gathers what each subtree can't absorb, the outward pass
+    // turns it into joint accelerations, which are M⁻¹ x.
+    void Articulation::solveMass(double *x) const {
+        const std::size_t n = links.size();
+        bias_.assign(n, Force{});
+        acc_.resize(n);
+        u_.resize(std::size_t(ndof_));
+        for (std::size_t i = n; i-- > 0;) {
+            const Link &L = links[i];
+            const Factor &F = factor_[i];
+            double *u = u_.data() + L.dof0;
+            for (int a = 0; a < L.ndof; ++a) u[a] = x[L.dof0 + a] - dot(L.S[a], bias_[i]);
+            if (L.parent < 0) continue;
+            Force passed = bias_[i];
+            for (int a = 0; a < L.ndof; ++a) {
+                double du = 0.0;
+                for (int b = 0; b < L.ndof; ++b) du += F.Dinv[a][b] * u[b];
+                passed += du * F.U[a];
+            }
+            bias_[std::size_t(L.parent)] += passed;
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            const Link &L = links[i];
+            const Factor &F = factor_[i];
+            const Motion ap = L.parent >= 0 ? acc_[std::size_t(L.parent)] : Motion{};
+            double r[6];
+            for (int a = 0; a < L.ndof; ++a) r[a] = u_[std::size_t(L.dof0 + a)] - dot(ap, F.U[a]);
+            Motion ai = ap;
+            for (int a = 0; a < L.ndof; ++a) {
+                double qdd = 0.0;
+                for (int b = 0; b < L.ndof; ++b) qdd += F.Dinv[a][b] * r[b];
+                x[L.dof0 + a] = qdd;
+                ai += qdd * L.S[a];
+            }
+            acc_[i] = ai;
+        }
+    }
+
+    void Articulation::solveAt(int link, const Force *f, int count, double *out) const {
+        const std::size_t n = links.size(), nd = std::size_t(ndof_);
+        acc_.resize(3 * n);
+        u_.resize(3 * nd);
+        onPath_.resize(n, 0);
+        if (++pathStamp_ == 0) {
+            std::fill(onPath_.begin(), onPath_.end(), 0u);
+            pathStamp_ = 1;
+        }
+        Force carried[3] = {};
+        for (int i = link; i >= 0; i = links[std::size_t(i)].parent) {
+            const Link &L = links[std::size_t(i)];
+            const Factor &F = factor_[std::size_t(i)];
+            onPath_[std::size_t(i)] = pathStamp_;
+            for (int c = 0; c < count; ++c) {
+                double *u = u_.data() + std::size_t(c) * nd + std::size_t(L.dof0);
+                for (int a = 0; a < L.ndof; ++a) u[a] = dot(L.S[a], f[c]) - dot(L.S[a], carried[c]);
+                for (int a = 0; a < L.ndof; ++a) {
+                    double du = 0.0;
+                    for (int b = 0; b < L.ndof; ++b) du += F.Dinv[a][b] * u[b];
+                    carried[c] += du * F.U[a];
+                }
+            }
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            const Link &L = links[i];
+            const Factor &F = factor_[i];
+            const bool path = onPath_[i] == pathStamp_;
+            for (int c = 0; c < count; ++c) {
+                Motion *acc = acc_.data() + std::size_t(c) * n;
+                const Motion ap = L.parent >= 0 ? acc[L.parent] : Motion{};
+                const double *u = u_.data() + std::size_t(c) * nd + std::size_t(L.dof0);
+                double r[6];
+                for (int a = 0; a < L.ndof; ++a) r[a] = (path ? u[a] : 0.0) - dot(ap, F.U[a]);
+                Motion ai = ap;
+                double *x = out + std::size_t(c) * nd + std::size_t(L.dof0);
+                for (int a = 0; a < L.ndof; ++a) {
+                    double qdd = 0.0;
+                    for (int b = 0; b < L.ndof; ++b) qdd += F.Dinv[a][b] * r[b];
+                    x[a] = qdd;
+                    ai += qdd * L.S[a];
+                }
+                acc[i] = ai;
+            }
+        }
+    }
+
     void Articulation::addPointRow(int link, const Vec3 &xWorld, const Vec3 &dir, double scale, double *row) const {
         if (link < 0) return;
         const Vec3 rxd = cross(xWorld - O, dir);
@@ -264,6 +397,16 @@ namespace hf {
             for (int k = 0; k < L.ndof; ++k) V += qd[L.dof0 + k] * L.S[k];
         }
         return V;
+    }
+
+    void Articulation::twists(const double *qd, std::vector<Motion> &V) const {
+        V.resize(links.size());
+        for (std::size_t i = 0; i < links.size(); ++i) {
+            const Link &L = links[i];
+            Motion t = L.parent >= 0 ? V[std::size_t(L.parent)] : Motion{};
+            for (int k = 0; k < L.ndof; ++k) t += qd[L.dof0 + k] * L.S[k];
+            V[i] = t;
+        }
     }
 
     Vec3 Articulation::linkVelocity(int link) const {

@@ -5,19 +5,16 @@
 
 #include <doctest/doctest.h>
 
+#include "Builders.hpp"
 #include "hf/World.hpp"
+#include "host/Host.hpp"
 
 using namespace hf;
+using namespace build;
 
 namespace {
 
     constexpr double kPi = std::numbers::pi;
-    constexpr double kDt = 1.0 / 60.0;
-
-    Mat3 boxInertia(double m, const Vec3 &half) {
-        const double x = 4 * half.x * half.x, y = 4 * half.y * half.y, z = 4 * half.z * half.z;
-        return Mat3(m / 12.0 * (y + z), 0, 0, 0, m / 12.0 * (x + z), 0, 0, 0, m / 12.0 * (x + y));
-    }
 
     BodyId addBox(World &w, const Vec3 &position, double mass, const Vec3 &half) {
         BodyDesc d;
@@ -56,10 +53,6 @@ namespace {
                     k.restitution = restitution;
                     w.addContact(k);
                 }
-    }
-
-    void run(World &w, double seconds) {
-        for (int s = 0; s < int(std::lround(seconds / kDt)); ++s) w.step(kDt);
     }
 
 } // namespace
@@ -293,6 +286,217 @@ TEST_CASE("a fast-rolling ball keeps its height, whichever side of the contact i
     }
 }
 
+TEST_CASE("a free body tumbles with its energy and momentum, and flips about its middle axis") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    BodyDesc d;
+    d.mass = 1.0;
+    d.inertia = Mat3(1.0, 0, 0, 0, 2.0, 0, 0, 0, 3.0);
+    d.angularVelocity = Vec3{0.01, 5.0, 0.01}; // about the intermediate axis, nudged
+    const BodyId b = w.addBody(d);
+    const auto spin = [&](double &energy, double &momentum) {
+        const Mat3 R = toMat3(w.orientation(b));
+        const Vec3 om = w.angularVelocity(b), L = R * (d.inertia * (transpose(R) * om));
+        energy = 0.5 * dot(om, L);
+        momentum = length(L);
+        return (transpose(R) * om).y;
+    };
+    double E0, L0;
+    double prev = spin(E0, L0);
+    int flips = 0;
+    for (int i = 0; i < 1200; ++i) {
+        w.step(kDt);
+        double E, L;
+        const double wy = spin(E, L);
+        flips += (wy > 0.0) != (prev > 0.0);
+        prev = wy;
+        CHECK(std::fabs(E - E0) < 1e-6 * E0);
+        CHECK(std::fabs(L - L0) < 1e-6 * L0);
+    }
+    CHECK_MESSAGE(flips >= 2, "spun about its intermediate axis, it turns over and back (Dzhanibekov)");
+}
+
+TEST_CASE("a thin rod spinning on a ball joint keeps its energy") {
+    // The velocity terms taken at the start of each sub-step made this gain energy without bound.
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const double m = 1.0, hl = 0.5, t = 0.02;
+    BodyDesc d;
+    d.mass = m;
+    d.position = Vec3{hl, 2, 0};
+    d.inertia = boxInertia(m, Vec3{hl, t, t});
+    d.angularVelocity = Vec3{20.0, 0.0, 3.0};
+    d.velocity = cross(d.angularVelocity, Vec3{hl, 0, 0});
+    const BodyId rod = w.addBody(d);
+    JointDesc j;
+    j.type = JointType::Ball;
+    j.b = rod;
+    j.frameA = Frame{Vec3{0, 2, 0}, Quat{}};
+    j.frameB = Frame{Vec3{-hl, 0, 0}, Quat{}};
+    w.addJoint(j);
+    const auto energy = [&] {
+        const Vec3 v = w.velocity(rod), om = w.angularVelocity(rod);
+        const Mat3 R = toMat3(w.orientation(rod));
+        return 0.5 * m * dot(v, v) + 0.5 * dot(om, R * (d.inertia * (transpose(R) * om)));
+    };
+    const double e0 = energy();
+    run(w, 20.0);
+    CHECK_MESSAGE(std::fabs(energy() - e0) < 1e-3 * e0, "no energy from nowhere");
+}
+
+namespace {
+
+    // The host's detection for a ball over the plane y = 0, reported while still within reach.
+    void ballOverPlane(World &w, BodyId ground, BodyId ball, double r, double reach, double rolling = 0.0,
+                       double spinning = 0.0) {
+        w.clearContacts();
+        const Vec3 c = w.position(ball);
+        if (c.y - r > reach) return;
+        Contact k;
+        k.a = ground;
+        k.b = ball;
+        k.point = Vec3{c.x, 0, c.z};
+        k.normal = Vec3{0, 1, 0};
+        k.depth = r - c.y;
+        k.feature = 1;
+        k.rolling = rolling;
+        k.spinning = spinning;
+        w.addContact(k);
+    }
+
+} // namespace
+
+TEST_CASE("a fast ball stops on a surface it would have passed in one step") {
+    // One sub-step, so nothing but the speculative row stands between the ball and the far side: with more, the
+    // per-sub-step refresh catches it a little way in and pushes it back out.
+    WorldSettings settings;
+    settings.substeps = 1;
+    World w(settings);
+    const BodyId ground = addGround(w);
+    const double r = 0.1;
+    BodyDesc d;
+    d.position = Vec3{0, 0.6, 0};
+    d.velocity = Vec3{0, -40.0, 0}; // 0.67 m a step: from 0.5 m above, through a thin plate and out
+    d.mass = 1.0;
+    d.inertia = Mat3(0.4 * r * r);
+    const BodyId ball = w.addBody(d);
+    double lowest = 1e9;
+    for (int i = 0; i < 30; ++i) {
+        ballOverPlane(w, ground, ball, r, 1.0);
+        w.step(kDt);
+        lowest = std::min(lowest, w.position(ball).y);
+    }
+    CHECK_MESSAGE(lowest > r - 0.01, "a gap reported ahead is a speculative contact: it never gets past the surface");
+    CHECK_MESSAGE(std::fabs(w.velocity(ball).y) < 0.05, "and it ends at rest on it");
+}
+
+TEST_CASE("a gap that won't close this step leaves free fall alone") {
+    World w;
+    const BodyId ground = addGround(w);
+    BodyDesc d;
+    d.position = Vec3{0, 0.6, 0};
+    d.velocity = Vec3{0, -1.0, 0};
+    d.mass = 1.0;
+    d.inertia = Mat3(0.004);
+    const BodyId ball = w.addBody(d);
+    ballOverPlane(w, ground, ball, 0.1, 1.0);
+    w.step(kDt);
+    CHECK_MESSAGE(std::fabs(w.velocity(ball).y - (-1.0 - 9.81 * kDt)) < 1e-12, "falling exactly as with no contact");
+}
+
+TEST_CASE("rolling resistance slows a rolling ball at the rate its lever arm sets") {
+    // Rolling without slipping, a torque of arm × mg against the spin decelerates a solid ball at arm g / (1.4 r).
+    World w;
+    const BodyId ground = addGround(w);
+    const double r = 0.5, m = 10.0, arm = 0.01, v0 = 5.0;
+    BodyDesc d;
+    d.position = Vec3{0, r, 0};
+    d.velocity = Vec3{v0, 0, 0};
+    d.angularVelocity = Vec3{0, 0, -v0 / r};
+    d.mass = m;
+    d.inertia = Mat3(0.4 * m * r * r);
+    const BodyId ball = w.addBody(d);
+    for (int i = 0; i < 120; ++i) {
+        ballOverPlane(w, ground, ball, r, 0.1, arm, 0.0);
+        w.step(kDt);
+    }
+    const double expected = v0 - arm * 9.81 / (1.4 * r) * 2.0;
+    CHECK_MESSAGE(std::fabs(w.velocity(ball).x - expected) < 0.01, "4.72 m/s after 2 s");
+    CHECK_MESSAGE(std::fabs(w.velocity(ball).x + w.angularVelocity(ball).z * r) < 1e-3, "still rolling, not skidding");
+}
+
+TEST_CASE("spinning friction stops a ball turning on its contact point") {
+    World w;
+    const BodyId ground = addGround(w);
+    const double r = 0.5, m = 10.0, arm = 0.01, w0 = 10.0;
+    BodyDesc d;
+    d.position = Vec3{0, r, 0};
+    d.angularVelocity = Vec3{0, w0, 0};
+    d.mass = m;
+    d.inertia = Mat3(0.4 * m * r * r);
+    const BodyId ball = w.addBody(d);
+    const auto runFor = [&](double seconds) {
+        for (int i = 0; i < int(std::lround(seconds / kDt)); ++i) {
+            ballOverPlane(w, ground, ball, r, 0.1, 0.0, arm);
+            w.step(kDt);
+        }
+    };
+    runFor(2.0);
+    // arm × mg against I = 0.4 m r²: 0.981 rad/s².
+    CHECK_MESSAGE(std::fabs(w.angularVelocity(ball).y - (w0 - arm * 9.81 / (0.4 * r * r) * 2.0)) < 0.05,
+                  "8.04 rad/s after 2 s");
+    runFor(10.0);
+    CHECK_MESSAGE(std::fabs(w.angularVelocity(ball).y) < 1e-3, "then it stops, and doesn't turn back");
+}
+
+TEST_CASE("a cart on hinged wheels coasts on, and rolling resistance slows it") {
+    // The wheels are links of the cart's machine: their rolling rows go through its mobility.
+    const auto coast = [](double rolling) {
+        host::Host h;
+        const BodyId cart = h.addBox(Vec3{0, 0.6, 0}, Quat{}, Vec3{1.0, 0.15, 0.6}, 100.0);
+        for (double x : {-0.8, 0.8})
+            for (double z : {-0.75, 0.75}) {
+                const BodyId wheel = h.addSphere(Vec3{x, 0.3, z}, 0.3, 5.0);
+                h.shapes.back().rolling = rolling;
+                h.addJoint(jointAt(h.world, JointType::Hinge, cart, wheel, Vec3{x, 0.3, z}, Vec3{0, 0, 1}));
+            }
+        for (int i = 0; i < 30; ++i) h.step(kDt);
+        for (const host::Shape &s : h.shapes)
+            if (s.body.valid() && h.world.contains(s.body) && s.kind != host::ShapeKind::Plane)
+                h.world.setVelocity(s.body, Vec3{4.0, 0, 0},
+                                    s.kind == host::ShapeKind::Sphere ? Vec3{0, 0, -4.0 / 0.3} : Vec3{});
+        for (int i = 0; i < 120; ++i) h.step(kDt);
+        return h.world.velocity(cart).x;
+    };
+    CHECK_MESSAGE(std::fabs(coast(0.0) - 4.0) < 0.02, "free wheels coast on");
+    CHECK_MESSAGE(coast(0.02) < 3.8, "resisted wheels slow it down");
+}
+
+TEST_CASE("an edited body moves with its new mass") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const BodyId box = addBox(w, Vec3{0, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
+    w.setVelocity(box, Vec3{1, 0, 0}, Vec3{});
+    w.setMassProperties(box, 4.0, boxInertia(4.0, Vec3{0.5, 0.5, 0.5}));
+    w.applyForce(box, Vec3{40, 0, 0}, w.position(box));
+    w.step(kDt);
+    CHECK_MESSAGE(std::fabs(w.velocity(box).x - (1.0 + 10.0 * kDt)) < 1e-12, "40 N on 4 kg, and it kept its speed");
+}
+
+TEST_CASE("a body made static stays put, and carries on when let go") {
+    World w;
+    const BodyId box = addBox(w, Vec3{0, 5, 0}, 2.0, Vec3{0.5, 0.5, 0.5});
+    w.setStatic(box, true);
+    run(w, 1.0);
+    CHECK_MESSAGE(w.position(box).y == 5.0, "static, gravity doesn't move it");
+    w.setStatic(box, false);
+    run(w, 0.5);
+    CHECK_MESSAGE(w.position(box).y < 5.0 - 1.0, "dynamic again, it falls");
+}
+
 TEST_CASE("a hinged bar falls onto the ground and rests there") {
     World w;
     const BodyId ground = addGround(w);
@@ -326,6 +530,64 @@ TEST_CASE("a hinged bar falls onto the ground and rests there") {
     CHECK_MESSAGE((lowest > -0.01 && lowest < 0.005), "its tip rests on the ground");
     CHECK_MESSAGE(length(w.angularVelocity(bar)) < 1e-2, "and stays there");
     CHECK_MESSAGE(worstArm < 1e-9, "the hinge held exactly through the impact");
+}
+
+TEST_CASE("a bar folds onto the bar it's hinged to and rests there") {
+    // A is hinged to the world with its tip on the ground; B is hinged to A's top edge and falls onto it, so the
+    // contact between them has both ends on one machine.
+    World w;
+    const BodyId ground = addGround(w);
+    const Vec3 half{1.0, 0.05, 0.05}, pivot{0, 0.5, 0};
+    const auto bar = [&](const Vec3 &end, double angle) {
+        BodyDesc d;
+        d.position = end + aboutZ(angle) * Vec3{1.0, 0, 0};
+        d.orientation = aboutZ(angle);
+        d.mass = 5.0;
+        d.inertia = boxInertia(5.0, half);
+        return w.addBody(d);
+    };
+    const double down = -10.0 * kPi / 180.0;
+    const BodyId a = bar(pivot, down);
+    const Vec3 top = pivot + aboutZ(down) * Vec3{0, 0.05, 0};
+    const BodyId b = bar(top + aboutZ(down) * Vec3{0, 0.05, 0}, 30.0 * kPi / 180.0);
+    w.addJoint(jointAt(w, JointType::Hinge, a, BodyId{}, pivot, Vec3{0, 0, 1}));
+    w.addJoint(jointAt(w, JointType::Hinge, a, b, top, Vec3{0, 0, 1}));
+
+    // B's far bottom corners against A's top face.
+    const auto onA = [&] {
+        double deepest = 0.0;
+        const Vec3 n = w.orientation(a) * Vec3{0, 1, 0};
+        const Vec3 face = w.position(a) + 0.05 * n;
+        std::uint64_t feature = 100;
+        for (double sz : {-1.0, 1.0}) {
+            const Vec3 p = w.position(b) + w.orientation(b) * Vec3{1.0, -0.05, sz * 0.05};
+            const double depth = dot(face - p, n);
+            deepest = std::max(deepest, depth);
+            if (depth < -0.01) continue;
+            Contact k;
+            k.a = a;
+            k.b = b;
+            k.point = p;
+            k.normal = n;
+            k.depth = depth;
+            k.feature = ++feature;
+            w.addContact(k);
+        }
+        return deepest;
+    };
+
+    double deepest = 0.0;
+    for (int s = 0; s < 240; ++s) {
+        w.clearContacts();
+        boxOnGround(w, ground, a, half);
+        const double d = onA();
+        if (s > 120) deepest = std::max(deepest, d);
+        w.step(kDt);
+    }
+    CHECK_MESSAGE(w.jointInfo({1, 0}).machine == w.jointInfo({0, 0}).machine, "one machine");
+    CHECK_MESSAGE(deepest < 0.005, "B rests on A without sinking in");
+    CHECK_MESSAGE(length(w.angularVelocity(b)) < 1e-2, "and both stay put");
+    CHECK_MESSAGE(length(w.angularVelocity(a)) < 1e-2, "");
 }
 
 TEST_CASE("welded bodies move as one") {
@@ -374,43 +636,6 @@ TEST_CASE("handles of removed bodies stay invalid") {
     CHECK_MESSAGE(w.contains(b), "the new one is live");
     CHECK_MESSAGE((a.index == b.index && a.generation != b.generation), "in the same slot, a new generation");
 }
-
-namespace {
-
-    // The rotation taking +X onto axis.
-    Quat xTo(const Vec3 &axis) {
-        const Vec3 a = normalize(axis);
-        return normalize(Quat{1.0 + a.x, cross(Vec3{1, 0, 0}, a)});
-    }
-
-    // A joint at a world point about a world axis, with the bodies where they are: their frames coincide.
-    JointDesc jointAt(World &w, JointType type, BodyId a, BodyId b, const Vec3 &point, const Vec3 &axis) {
-        const auto local = [&](BodyId body) -> Frame {
-            if (!body.valid()) return {point, xTo(axis)};
-            const Quat q = w.orientation(body);
-            return {conjugate(q) * (point - w.position(body)), normalize(conjugate(q) * xTo(axis))};
-        };
-        JointDesc j;
-        j.type = type;
-        j.a = a;
-        j.b = b;
-        j.frameA = local(a);
-        j.frameB = local(b);
-        return j;
-    }
-
-    BodyId rodBetween(World &w, const Vec3 &p, const Vec3 &q, double mass) {
-        const Vec3 d = q - p;
-        const double half = 0.5 * length(d);
-        BodyDesc b;
-        b.position = 0.5 * (p + q);
-        b.orientation = xTo(d);
-        b.mass = mass;
-        b.inertia = boxInertia(mass, Vec3{half, 0.1, 0.1});
-        return w.addBody(b);
-    }
-
-} // namespace
 
 TEST_CASE("a cylinder in a loop lifts a heavy boom to a jumped target at its speed") {
     World w;

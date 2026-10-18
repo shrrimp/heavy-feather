@@ -240,3 +240,60 @@ TEST_CASE("a floating machine keeps its momentum") {
     CHECK_MESSAGE(length(h1.f - h0.f) < 5e-2 * scale, "internal torques keep linear momentum, to O(h)");
     CHECK_MESSAGE(length(h1.n - h0.n) < 2e-3 * scale, "internal torques keep angular momentum");
 }
+
+TEST_CASE("the articulated-body solve is the dense solve, in O(n)") {
+    Random rnd(41);
+    double worst = 0.0, worstDiag = 0.0;
+    for (int trial = 0; trial < 60; ++trial) {
+        Articulation a = randomTree(rnd, 2 + trial % 14, trial % 2 == 0);
+        const int n = a.dofs();
+        std::vector<double> M, L, diag;
+        a.massMatrix(M);
+        a.massDiagonal(diag);
+        L = M;
+        choleskyFactor(L.data(), n, n);
+        a.factorMass();
+        for (int r = 0; r < 3; ++r) {
+            std::vector<double> b(a.qdot.size());
+            for (double &x : b) x = rnd.uni(-10.0, 10.0);
+            std::vector<double> dense = b, tree = b;
+            choleskySolve(L.data(), n, n, dense.data());
+            a.solveMass(tree.data());
+            double scale = 0.0;
+            for (double x : dense) scale = std::max(scale, std::fabs(x));
+            for (int i = 0; i < n; ++i)
+                worst = std::max(worst, std::fabs(tree[std::size_t(i)] - dense[std::size_t(i)]) / scale);
+        }
+        for (int i = 0; i < n; ++i)
+            worstDiag = std::max(worstDiag, std::fabs(diag[std::size_t(i)] - M[std::size_t(i * n + i)]) /
+                                                std::fabs(M[std::size_t(i * n + i)]));
+    }
+    CHECK_MESSAGE(worst < 1e-9, "M⁻¹ b from the tree recursion matches the Cholesky solve");
+    CHECK_MESSAGE(worstDiag < 1e-12, "the diagonal from the composite inertias matches CRBA's");
+}
+
+TEST_CASE("a wrench at one link solves as its generalised force does") {
+    Random rnd(43);
+    double worst = 0.0;
+    for (int trial = 0; trial < 40; ++trial) {
+        Articulation a = randomTree(rnd, 3 + trial % 12, trial % 2 == 1);
+        a.factorMass();
+        const int n = a.dofs(), link = int(rnd.uni(0, double(a.links.size()) - 0.001));
+        Force f[3];
+        for (Force &x : f) x = Force{rnd.vec(2.0), rnd.vec(2.0)};
+        std::vector<double> at(3 * a.qdot.size());
+        a.solveAt(link, f, 3, at.data());
+        for (int c = 0; c < 3; ++c) {
+            std::vector<double> b(a.qdot.size(), 0.0);
+            for (int j = link; j >= 0; j = a.links[std::size_t(j)].parent) {
+                const Link &L = a.links[std::size_t(j)];
+                for (int k = 0; k < L.ndof; ++k) b[std::size_t(L.dof0 + k)] = dot(L.S[k], f[c]);
+            }
+            a.solveMass(b.data());
+            for (int i = 0; i < n; ++i)
+                worst = std::max(worst, std::fabs(at[std::size_t(c * n + i)] - b[std::size_t(i)]) /
+                                            (1.0 + std::fabs(b[std::size_t(i)])));
+        }
+    }
+    CHECK_MESSAGE(worst < 1e-12, "climbing only the link's path gives the full solve's answer");
+}

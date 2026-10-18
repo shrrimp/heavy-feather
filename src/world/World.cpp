@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <utility>
 
 #include "world/WorldImpl.hpp"
 
@@ -108,6 +107,21 @@ namespace hf {
         return w;
     }
 
+    void World::setMassProperties(BodyId id, double mass, const Mat3 &inertia) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return;
+        b->desc.mass = mass;
+        b->desc.inertia = inertia;
+        impl_->dirty = true;
+    }
+
+    void World::setStatic(BodyId id, bool isStatic) {
+        BodySlot *b = impl_->body(id);
+        if (!b || b->desc.isStatic == isStatic) return;
+        b->desc.isStatic = isStatic;
+        impl_->dirty = true;
+    }
+
     void World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
         BodySlot *b = impl_->body(id);
         if (!b) return;
@@ -144,22 +158,6 @@ namespace hf {
         if (b) b->torque += torque;
     }
 
-    namespace {
-
-        // A joint frame in world coordinates; an invalid body is the world.
-        void frameInWorld(const World &w, BodyId body, const Frame &f, Vec3 &p, Quat &q) {
-            if (!body.valid()) {
-                p = f.position;
-                q = f.rotation;
-                return;
-            }
-            const Quat qb = w.orientation(body);
-            p = w.position(body) + qb * f.position;
-            q = qb * f.rotation;
-        }
-
-    } // namespace
-
     JointId World::addJoint(const JointDesc &desc) {
         Impl &I = *impl_;
         const bool aOk = desc.a.valid() ? I.body(desc.a) != nullptr : desc.b.valid();
@@ -181,9 +179,14 @@ namespace hf {
         j.alive = true;
         j.targetFrom = j.targetTo = j.targetEff = desc.target;
         I.dirty = true;
-        // A piston's setpoint starts where the piston is, and travels to its target at the drive's speed.
-        if (desc.type == JointType::Piston)
-            j.targetFrom = j.targetTo = j.targetEff = jointPosition({index, generation});
+        // A piston's or servo's setpoint starts where it is, and travels to its target at the drive's speed. One
+        // born a hair off starts on its target: twin cylinders authored a fraction of a millimetre apart would
+        // otherwise ask the solve for two speeds on one freedom.
+        if (positionDrive(desc.type)) {
+            j.position = j.positionPrev = I.jointPosition(j);
+            const bool there = std::fabs(j.position - desc.target) <= kServoDeadband;
+            j.targetFrom = j.targetTo = j.targetEff = there ? desc.target : j.position;
+        }
         return {index, generation};
     }
 
@@ -202,9 +205,15 @@ namespace hf {
     void World::setTarget(JointId id, double target) {
         JointSlot *j = impl_->joint(id);
         if (!j) return;
-        const bool piston = j->desc.type == JointType::Piston;
-        j->desc.target = piston ? std::clamp(target, j->desc.min, j->desc.max) : target;
+        j->desc.target = positionDrive(j->desc.type) ? std::clamp(target, j->desc.min, j->desc.max) : target;
         j->commanded = true;
+    }
+
+    void World::setLever(JointId id, double lever) {
+        JointSlot *j = impl_->joint(id);
+        if (!j) return;
+        j->lever = std::clamp(lever, -1.0, 1.0);
+        if (j->desc.type == JointType::Motor) j->desc.target = j->lever * j->desc.speed;
     }
 
     double World::target(JointId id) const {
@@ -214,15 +223,32 @@ namespace hf {
 
     double World::jointPosition(JointId id) const {
         const JointSlot *j = impl_->joint(id);
-        if (!j) return 0.0;
+        return j ? impl_->jointPosition(*j) : 0.0;
+    }
+
+    double World::Impl::jointPosition(const JointSlot &j) const {
+        const auto frame = [&](BodyId id, const Frame &f, Vec3 &p, Quat &q) {
+            const BodySlot *b = body(id);
+            if (!b) {
+                p = f.position;
+                q = f.rotation;
+                return;
+            }
+            Vec3 c, v, w;
+            Quat qb;
+            bodyState(*b, c, qb, v, w);
+            p = c + qb * f.position;
+            q = qb * f.rotation;
+        };
         Vec3 pA, pB;
         Quat qA, qB;
-        frameInWorld(*this, j->desc.a, j->desc.frameA, pA, qA);
-        frameInWorld(*this, j->desc.b, j->desc.frameB, pB, qB);
-        switch (j->desc.type) {
+        frame(j.desc.a, j.desc.frameA, pA, qA);
+        frame(j.desc.b, j.desc.frameB, pB, qB);
+        switch (j.desc.type) {
             case JointType::Hinge:
             case JointType::Motor:
-            case JointType::AngularSpring: {
+            case JointType::AngularSpring:
+            case JointType::Servo: {
                 const Vec3 yA = qA * Vec3{0, 1, 0}, zA = qA * Vec3{0, 0, 1}, yB = qB * Vec3{0, 1, 0};
                 return std::atan2(dot(yB, zA), dot(yB, yA));
             }

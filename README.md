@@ -26,7 +26,7 @@ It doesn't depend on any engine and for now the plan is for it to do no collisio
 
 ## Where it's at
 
-v0.1: machines built from bodies and joints and solved as articulations, motors and pistons, contacts with friction, and the basic `hf::World` API.
+v0.1: machines built from bodies and joints and solved as articulations, motors, pistons and servos worked like an operator's levers, contacts with friction and rolling resistance, and the basic `hf::World` API. Steps are deterministic and allocate nothing once warm.
 
 It started as a prototype loosely implemented in Heavy Metal, which worked well enough that I decided to turn it into a standalone library. v0.1 is that prototype's machine solver, ported and cleaned up.
 

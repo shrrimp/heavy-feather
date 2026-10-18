@@ -363,3 +363,54 @@ TEST_CASE("contact mobility W") {
         CHECK_MESSAGE(c >= -1e-12, "W is positive semidefinite");
     }
 }
+
+TEST_CASE("a link's shared response gives each wrench's mobility") {
+    Random rnd(7);
+    for (int t = 0; t < 10; ++t) {
+        FourBar fb = makeFourBar();
+        fb.m.denseDofs = t % 2 ? 0 : 12; // both solves of M
+        fb.m.art.qdot = {rnd.uni(-1, 1), rnd.uni(-1, 1), rnd.uni(-1, 1)};
+        const double h = 1.0 / 960.0;
+        fb.m.dynamics(h, kGravity, {});
+        addClosure(fb, h, false, true);
+        fb.m.prepareRows();
+        std::vector<RowState> st;
+        fb.m.solveRows(st);
+        fb.m.buildMobility();
+
+        const std::size_t n = std::size_t(fb.m.dofs());
+        const int link = int(rnd.uni(0, double(fb.m.art.links.size()) - 0.001));
+        std::vector<double> Z(6 * n), w(n), direct(n);
+        double held[6][6], unheld[6][6];
+        fb.m.linkResponse(link, Z.data(), held, unheld);
+
+        const Force psi{Vec3{rnd.uni(-1, 1), rnd.uni(-1, 1), rnd.uni(-1, 1)},
+                        Vec3{rnd.uni(-1, 1), rnd.uni(-1, 1), rnd.uni(-1, 1)}};
+        for (std::size_t i = 0; i < n; ++i) {
+            w[i] = 0.0;
+            for (int c = 0; c < 6; ++c) w[i] += component(psi, c) * Z[std::size_t(c) * n + i];
+        }
+        // The reference: the wrench as a generalised force, through W.
+        std::vector<double> g(n, 0.0);
+        for (int j = link; j >= 0; j = fb.m.art.links[std::size_t(j)].parent) {
+            const Link &L = fb.m.art.links[std::size_t(j)];
+            for (int a = 0; a < L.ndof; ++a) g[std::size_t(L.dof0 + a)] += dot(L.S[a], psi);
+        }
+        const double free = fb.m.mobility(g.data(), direct.data());
+        double worst = 0.0, quadratic = 0.0;
+        for (std::size_t i = 0; i < n; ++i) worst = std::max(worst, std::fabs(w[i] - direct[i]));
+        for (int r = 0; r < 6; ++r)
+            for (int c = 0; c < 6; ++c) quadratic += component(psi, r) * unheld[r][c] * component(psi, c);
+        CHECK_MESSAGE(worst < 1e-10, "Σ ψ_c Z_c is the wrench's own mobility");
+        CHECK_MESSAGE(std::fabs(quadratic - free) < 1e-9 * (1 + free),
+                      "ψᵀ Λ ψ is its mobility with nothing held");
+        const Motion moved = fb.m.art.twistOf(link, w.data());
+        double worstTwist = 0.0;
+        for (int r = 0; r < 6; ++r) {
+            double s = 0.0;
+            for (int c = 0; c < 6; ++c) s += held[r][c] * component(psi, c);
+            worstTwist = std::max(worstTwist, std::fabs(s - component(moved, r)));
+        }
+        CHECK_MESSAGE(worstTwist < 1e-10, "held ψ is how the link's own twist answers");
+    }
+}

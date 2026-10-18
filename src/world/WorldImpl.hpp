@@ -2,7 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "hf/World.hpp"
@@ -37,6 +38,19 @@ namespace hf {
         std::vector<RowState> velState, posState;
         std::vector<std::uint64_t> velTags, posTags;
         std::vector<int> driveRow; // per joint ref: its drive row, or -1
+        // Each row's active set as last solved, sorted by tag: the next solve's warm start. Only the rows of the
+        // last solve are kept, so a removed joint leaves nothing behind.
+        std::vector<std::pair<std::uint64_t, RowState>> lastVel, lastPos;
+
+        // Per link: its response in this sub-step's cache, or -1.
+        std::vector<int> response;
+
+        // Kept from step to step, so a warm step allocates nothing.
+        std::vector<Motion> twists;
+        std::vector<Vec3> c, v, w;
+        std::vector<Quat> R;
+        std::vector<double> row, errors, savedQ;
+        std::vector<Quat> savedQRot;
     };
 
     struct ContactData {
@@ -47,15 +61,37 @@ namespace hf {
         Vec3 n{};
         double depth = 0.0; // refreshed every sub-step
         double ln = 0.0, lt1 = 0.0, lt2 = 0.0;
+        double lr1 = 0.0, lr2 = 0.0, ls = 0.0; // angular impulses resisting rolling (about t1, t2) and spin (about n)
         double lnMax = 0.0, vnImpact = 0.0;
     };
 
     // A contact end on a machine: its rows through the machine's mobility, n doubles each, in the arena as
-    // gn, gt1, gt2, then W gn, W gt1, W gt2.
+    // gn, gt1, gt2, then W gn, W gt1, W gt2, and when the contact resists rolling or spin, the angular rows about t1,
+    // t2 and n after them the same way.
     struct ContactBlock {
         int machine = -1;
         std::size_t off = 0;
         int n = 0;
+    };
+
+    // Two links of one machine its held rows lock together have ~0 relative mobility through W. Floored at this much
+    // of their unconstrained mobility, far below any real mass ratio, a contact or spring between them stays finite.
+    constexpr double kLockedMobility = 1e-7;
+
+    // A contact's end on a machine link, through that link's shared response: its wrenches psi for n, t1, t2 and the
+    // turn rows about t1, t2, n.
+    struct MachineSide {
+        int machine = -1;
+        int response = -1;
+        Force psi[6];
+        int n = 0; // the machine's dofs
+    };
+
+    // A run of contacts on one link, swept against its twist, written to the machine once the run ends.
+    struct LinkRun {
+        int response = -1;
+        Motion V;
+        Force F;
     };
 
     struct ContactPrep {
@@ -67,11 +103,22 @@ namespace hf {
         Vec3 imR1cn{}, imR2cn{}, imR1ct1{}, imR1ct2{}, imR2ct1{}, imR2ct2{};
         double imA = 0.0, imB = 0.0;
         double kn = 0.0, kt1 = 0.0, kt2 = 0.0;
-        double kt12 = 0.0; // t1 W t2, for the exact 2×2 friction solve on a machine end
+        double kt12 = 0.0;  // t1 W t2, for the exact 2×2 friction solve on a machine end
+        bool turns = false; // resists rolling or spin
+        Vec3 imAr1{}, imAr2{}, imAs{}, imBr1{}, imBr2{}, imBs{}; // each end's I⁻¹ along t1, t2 and n
+        double kr1 = 0.0, kr2 = 0.0, ks = 0.0;
         SoftParams soft;
         double vtarget = 0.0, refLn = 0.0, posBias = 0.0, pseudo = 0.0;
-        int nb = 0;
-        ContactBlock blocks[2];
+        int ns = 0;
+        MachineSide sides[2];
+    };
+
+    // A machine link's response to unit wrenches this sub-step (Machine::linkResponse), shared by its contacts: Z in
+    // the response arena at off, and the link's 6×6 inverse inertia with nothing held.
+    struct LinkResponse {
+        int machine = -1, link = -1;
+        std::size_t off = 0;
+        double held[6][6] = {}, unheld[6][6] = {};
     };
 
     // A spring between bodies that aren't in one machine: a soft row swept with the contacts. Its velocity is
@@ -89,16 +136,26 @@ namespace hf {
         BodyId a, b;
         std::uint64_t feature = 0;
         bool operator==(const ContactKey &) const = default;
-    };
-
-    struct ContactKeyHash {
-        std::size_t operator()(const ContactKey &k) const {
-            std::uint64_t h = k.feature * 0x9E3779B97F4A7C15ull;
-            for (std::uint32_t x : {k.a.index, k.a.generation, k.b.index, k.b.generation})
-                h = (h ^ x) * 0x100000001B3ull;
-            return std::size_t(h);
+        bool operator<(const ContactKey &o) const {
+            return std::tie(a.index, a.generation, b.index, b.generation, feature) <
+                   std::tie(o.a.index, o.a.generation, o.b.index, o.b.generation, o.feature);
         }
     };
+
+    // Last step's impulses on a contact, found again by its key.
+    struct WarmStart {
+        ContactKey key;
+        double ln = 0.0, lt1 = 0.0, lt2 = 0.0, lr1 = 0.0, lr2 = 0.0, ls = 0.0;
+        bool operator<(const WarmStart &o) const { return key < o.key; }
+    };
+
+    // MachineSides.cpp: a contact's machine sides. The rows are n, t1, t2 and then the turn rows r1, r2, s; velocities
+    // add into v, impulses come in l. pseudo picks the position pass's pseudo-velocity over the velocity. Anything
+    // that reads or writes a machine's velocity directly must flush the runs first.
+    void addMachineSides(World::Impl &I, ContactPrep &p, const ContactData &c);
+    void machineVelocity(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, double *v);
+    void machineImpulse(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, const double *l);
+    void flushRuns(World::Impl &I, bool pseudo);
 
     struct HF_NO_EXPORT World::Impl {
         WorldSettings settings;
@@ -115,14 +172,22 @@ namespace hf {
         std::vector<ContactPrep> prep;
         std::vector<SpringPrep> springs;
         std::vector<double> arena;
-        std::unordered_map<ContactKey, std::pair<double, Vec3>, ContactKeyHash> warm; // ln, (lt1, lt2, 0)
-        std::unordered_map<std::uint64_t, RowState> rowState;
+        std::vector<LinkResponse> responses;
+        std::vector<double> responseArena;
+        std::vector<LinkRun> runs[2]; // per machine: on its velocity, and on its pseudo-velocity
+        std::vector<WarmStart> warm;  // sorted by key
+        // The rows of machines just rebuilt, so their first solve still warm-starts.
+        std::vector<std::pair<std::uint64_t, RowState>> carriedRows;
+        std::vector<int> groupDepth;
+        std::vector<std::size_t> depthStart;
+        std::vector<ContactData> contactScratch;
         WorldStats stats;
 
         BodySlot *body(BodyId id);
         const BodySlot *body(BodyId id) const;
         JointSlot *joint(JointId id);
         const JointSlot *joint(JointId id) const;
+        double jointPosition(const JointSlot &j) const; // from the bodies' poses
 
         // Groups.cpp
         void rebuildGroups();
@@ -143,6 +208,8 @@ namespace hf {
 
         // Contacts.cpp
         void beginContacts();
+        double contactDepth(const ContactData &c) const; // refreshed from the poses, after updateTurned
+        void updateTurned();
         void prepareContacts();
         void prepareSprings();
         void solveContacts();

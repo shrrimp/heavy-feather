@@ -7,6 +7,16 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
+# A small game around the library: collision, scenes, and an allocation counter. An object library, so the
+# counting operator new is always linked in.
+add_library(hf-test-host OBJECT
+  host/Allocations.cpp
+  host/Collision.cpp
+  host/Host.cpp
+  host/Scenes.cpp)
+target_include_directories(hf-test-host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hf-test-host PUBLIC hf_objects PRIVATE hf_warnings)
+
 set(HF_TEST_SOURCES
   ArticulationTests.cpp
   BoxLcpTests.cpp
@@ -18,6 +28,5 @@ set(HF_TEST_SOURCES
 
 # hf_objects rather than the shipped library: a shared build hides the internals these test.
 add_executable(hf-tests ${HF_TEST_SOURCES})
-target_link_libraries(hf-tests PRIVATE hf_objects doctest::doctest_with_main hf_warnings)
-
+target_link_libraries(hf-tests PRIVATE hf-test-host hf_objects doctest::doctest_with_main hf_warnings)
 add_test(NAME hf-tests COMMAND hf-tests)
