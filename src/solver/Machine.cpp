@@ -42,6 +42,9 @@ namespace hf {
                     }
         }
 
+        // Held in the mobility: a row with no bounds of its own, nor any that follow another's.
+        bool equality(const MachineRow &r) { return r.follows < 0 && std::isinf(r.lo) && std::isinf(r.hi); }
+
     } // namespace
 
     void Machine::dynamics(double h, const Vec3 &gravity, const std::vector<Force> &fext) {
@@ -213,13 +216,22 @@ namespace hf {
         b_.resize(m);
         lo_.resize(m);
         hi_.resize(m);
+        follow_.assign(m, Follow{});
+        bool follows = false;
         for (std::size_t i = 0; i < m; ++i) {
+            const MachineRow &r = rows_[i];
             const double s = dot(J_.data() + i * n, base.data(), n);
-            b_[i] = dead_[i] ? 0.0 : s - rows_[i].target;
-            lo_[i] = rows_[i].lo;
-            hi_[i] = rows_[i].hi;
+            const double compliance = A_[i * m + i] - diag_[i];
+            b_[i] = dead_[i] ? 0.0 : s - r.target - compliance * r.anchor;
+            lo_[i] = r.lo;
+            hi_[i] = r.hi;
+            if (r.follows >= 0) {
+                follow_[i] = {r.follows, r.ratio};
+                follows = true;
+            }
         }
-        st = solveBoxLcp(A_, b_, lo_, hi_, int(m), lambda_, state, lcp_);
+        if (!follows) follow_.clear();
+        st = solveBoxLcp(A_, b_, lo_, hi_, int(m), lambda_, state, lcp_, follow_);
         art.qdot = base;
         for (std::size_t i = 0; i < m; ++i) {
             const double l = lambda_[i];
@@ -245,7 +257,7 @@ namespace hf {
         // solve finds past its cap: the forklift's braked wheels, released, spun backwards at 90 rad/s.
         freeIdx_.clear();
         for (std::size_t i = 0; i < m; ++i)
-            if (std::isinf(rows_[i].lo) && std::isinf(rows_[i].hi)) freeIdx_.push_back(int(i));
+            if (equality(rows_[i])) freeIdx_.push_back(int(i));
         const std::size_t k = freeIdx_.size();
         Aff_.resize(k * k);
         for (std::size_t p = 0; p < k; ++p)
@@ -334,36 +346,86 @@ namespace hf {
     void Machine::prepareBounded() {
         const std::size_t n = std::size_t(n_), m = rows_.size();
         bIdx_.clear();
+        bOf_.assign(m, -1);
         for (std::size_t i = 0; i < m; ++i)
-            if (!(std::isinf(rows_[i].lo) && std::isinf(rows_[i].hi))) bIdx_.push_back(int(i));
+            if (!equality(rows_[i])) {
+                bOf_[i] = int(bIdx_.size());
+                bIdx_.push_back(int(i));
+            }
         bW_.assign(bIdx_.size() * n, 0.0);
         bK_.assign(bIdx_.size(), 0.0);
+        bG_.assign(bIdx_.size(), 0.0);
+        bK12_.assign(bIdx_.size(), 0.0);
         for (std::size_t b = 0; b < bIdx_.size(); ++b) {
             const std::size_t i = std::size_t(bIdx_[b]);
             const double *Ji = J_.data() + i * n;
             double *w = bW_.data() + b * n;
             mobility(Ji, w);
-            double k = dot(Ji, w, n);
-            k += rows_[i].compliance + std::max(rows_[i].relEps * diag_[i], 1e-300);
-            bK_[b] = k;
+            bG_[b] = A_[i * m + i] - diag_[i]; // the compliance the direct solve gave it
+            bK_[b] = dot(Ji, w, n) + bG_[b];
         }
+        for (std::size_t b = 0; b + 1 < bIdx_.size(); ++b)
+            if (rows_[std::size_t(bIdx_[b])].pairedWithNext)
+                bK12_[b] = dot(J_.data() + std::size_t(bIdx_[b]) * n, bW_.data() + (b + 1) * n, n);
     }
 
+    // Gauss-Seidel on the bounded rows, against the same compliant system the direct solve answered: its answer
+    // is a fixed point here, and only what the contacts changed moves them. A friction pair's 2×2 block is solved
+    // exactly and held within its circle: the direct solve could only box it.
     void Machine::sweepBounded() {
         const std::size_t n = std::size_t(n_);
-        for (std::size_t b = 0; b < bIdx_.size(); ++b) {
+        const auto residual = [&](std::size_t b) {
             const std::size_t i = std::size_t(bIdx_[b]);
             const MachineRow &r = rows_[i];
-            const double *Ji = J_.data() + i * n;
-            const double v = dot(Ji, art.qdot.data(), n);
-            const double old = lambda_[i];
-            const double nl = std::clamp(old - (v - r.target + r.compliance * old) / bK_[b], r.lo, r.hi);
-            const double d = nl - old;
-            if (d == 0.0) continue;
+            return dot(J_.data() + i * n, art.qdot.data(), n) - r.target + bG_[b] * (lambda_[i] - r.anchor);
+        };
+        const auto apply = [&](std::size_t b, double nl) {
+            const std::size_t i = std::size_t(bIdx_[b]);
+            const double d = nl - lambda_[i];
+            if (d == 0.0) return;
             lambda_[i] = nl;
             const double *w = bW_.data() + b * n;
             for (std::size_t c = 0; c < n; ++c) art.qdot[c] += d * w[c];
+        };
+        for (std::size_t b = 0; b < bIdx_.size(); ++b) {
+            const std::size_t i = std::size_t(bIdx_[b]);
+            const MachineRow &r = rows_[i];
+            const double cap = r.follows >= 0 ? r.ratio * std::max(0.0, lambda_[std::size_t(r.follows)]) : 0.0;
+            if (r.pairedWithNext && b + 1 < bIdx_.size()) {
+                const std::size_t j = std::size_t(bIdx_[b + 1]);
+                const double r1 = residual(b), r2 = residual(b + 1);
+                const double a = bK_[b], c = bK12_[b], d = bK_[b + 1], det = a * d - c * c;
+                double l1 = lambda_[i] - r1 / a, l2 = lambda_[j] - r2 / d;
+                if (det > 1e-12 * a * d) {
+                    l1 = lambda_[i] - (d * r1 - c * r2) / det;
+                    l2 = lambda_[j] - (a * r2 - c * r1) / det;
+                }
+                const double len = std::hypot(l1, l2);
+                if (len > cap) {
+                    l1 *= cap / len;
+                    l2 *= cap / len;
+                }
+                apply(b, l1);
+                apply(++b, l2);
+                continue;
+            }
+            const double lo = r.follows >= 0 ? -cap : r.lo, hi = r.follows >= 0 ? cap : r.hi;
+            apply(b, std::clamp(lambda_[i] - residual(b) / bK_[b], lo, hi));
         }
+    }
+
+    void Machine::pushRow(int row, double target) {
+        const int b = row >= 0 && std::size_t(row) < bOf_.size() ? bOf_[std::size_t(row)] : -1;
+        if (b < 0) return;
+        const std::size_t n = std::size_t(n_), i = std::size_t(row);
+        const double v = dot(J_.data() + i * n, art.qdot.data(), n);
+        const double k = bK_[std::size_t(b)] - bG_[std::size_t(b)];
+        if (!(k > 0.0)) return;
+        const double nl = std::clamp(lambda_[i] + (target - v) / k, rows_[i].lo, rows_[i].hi);
+        const double d = nl - lambda_[i];
+        lambda_[i] = nl;
+        const double *w = bW_.data() + std::size_t(b) * n;
+        for (std::size_t c = 0; c < n; ++c) art.qdot[c] += d * w[c];
     }
 
     void Machine::clearPosRows() {

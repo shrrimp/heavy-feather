@@ -39,6 +39,7 @@ It started as a prototype loosely implemented in Heavy Metal, which worked well 
 - **v0.4:** Break stuff: breakable joints, and load analysis for rigid-body rupture
 - **v0.5:** Performance and multi-threading
 - **v1.0:** Clean API, docs, and a basic host for testing and demos
+- **Later:** A follower-on-profile joint, for cams that are exact without any collision geometry
 
 ## Building
 

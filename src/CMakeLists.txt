@@ -10,6 +10,7 @@ include(GNUInstallDirs)
 set(HF_SOURCES
   Version.cpp
   contact/Contacts.cpp
+  contact/DirectContacts.cpp
   contact/MachineSides.cpp
   dynamics/Articulation.cpp
   math/Dense.cpp

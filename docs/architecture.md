@@ -22,7 +22,9 @@ mass of everything attached to it.
   hydraulics: rigid once their valve shuts, and a released lever stops them where they are.
 - **Contacts**: contacts, friction, and resistance to rolling and spinning, solved through the
   machines they touch. A contact reported before it touches is speculative, so a fast body stops
-  on a surface instead of passing through it.
+  on a surface instead of passing through it. A contact the host marks as part of a mechanism, a
+  cam on its follower or a gear on its gear, is solved with its machine's joints instead, exactly,
+  its friction bounded by however hard it ends up pushing.
 - **World**: what the host talks to. It takes bodies, joints and contacts, works out the
   machines, and steps them.
 

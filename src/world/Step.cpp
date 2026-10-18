@@ -84,6 +84,7 @@ namespace hf {
                 g.w += h * (g.invInertiaWorld() * g.torque);
                 gyroscopic(g, h);
             }
+            updateTurned();
             for (MachineData &md : machines) solveInternal(md);
 
             prepareContacts();
@@ -115,6 +116,7 @@ namespace hf {
         stats.contacts = int(prep.size());
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
+            for (int ci : md.contacts) stats.contacts += contacts[std::size_t(ci)].row >= 0;
             stats.links += int(md.groupOfLink.size());
             stats.dofs += md.m.dofs();
             stats.rows += md.m.rowCount();

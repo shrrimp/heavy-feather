@@ -23,6 +23,7 @@ set(HF_TEST_SOURCES
   DenseTests.cpp
   DriveTests.cpp
   MachineTests.cpp
+  MechanismTests.cpp
   MemoryTests.cpp
   SpatialTests.cpp
   StressTests.cpp

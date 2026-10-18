@@ -21,6 +21,14 @@ namespace hf {
         // by groupYield of the group's Jacobi scale. -1: no group.
         int group = -1;
         double groupYield = 0.0;
+        // A friction row: bounded by ±ratio × the multiplier of row follows, whatever the solve finds it to be. Paired
+        // with the next row, the two are bounded together, by a circle, wherever the sweeps take them.
+        int follows = -1;
+        double ratio = 0.0;
+        bool pairedWithNext = false;
+        // The multiplier the row's compliance measures from. Anchored at its last answer, a soft row gives while it
+        // changes and holds rigidly once it doesn't.
+        double anchor = 0.0;
     };
 
     struct MachineStats {
@@ -81,6 +89,8 @@ namespace hf {
         void prepareBounded();
         void sweepBounded();
         int boundedRows() const { return int(bIdx_.size()); }
+        // One bounded row, pushed on its own toward a velocity: a contact's bounce, after the sub-steps.
+        void pushRow(int row, double target);
 
         // The position pass: its own rows, solved for a pseudo-velocity that integrate spends and then forgets,
         // so correcting drift puts no momentum into the machine.
@@ -118,8 +128,9 @@ namespace hf {
         std::vector<std::uint8_t> dead_;
         std::vector<int> freeIdx_;
         std::vector<double> Aff_;
-        std::vector<int> bIdx_;       // bounded rows
-        std::vector<double> bW_, bK_; // their W Jᵀ and effective inverse mass
+        std::vector<Follow> follow_;
+        std::vector<int> bIdx_, bOf_;      // bounded rows, and each row's place among them (-1: not bounded)
+        std::vector<double> bW_, bK_, bG_, bK12_; // their W Jᵀ, effective inverse mass, compliance, pair coupling
 
         std::vector<MachineRow> posRows_;
         std::vector<double> posJ_, posY_, posA_, posDiag_, posB_, posLo_, posHi_, posLambda_;

@@ -377,6 +377,7 @@ namespace hf {
         md.driveRow.assign(md.joints.size(), -1);
         RowBuilder rb{*this, md, RowBuilder::Mode::Velocity};
         addJointRows(rb);
+        contactRows(md);
         m.prepareRows();
         warmRows(*this, md.lastVel, md.velState, md.velTags);
         m.solveRows(md.velState);
@@ -392,6 +393,7 @@ namespace hf {
         md.posTags.clear();
         RowBuilder rb{*this, md, RowBuilder::Mode::Position};
         addJointRows(rb);
+        contactPositionRows(md);
         warmRows(*this, md.lastPos, md.posState, md.posTags);
         md.m.solvePositions(md.posState);
         keepRows(md.lastPos, md.posState, md.posTags);
@@ -399,6 +401,7 @@ namespace hf {
 
     void World::Impl::afterContacts(MachineData &md) {
         recordDrives(*this, md);
+        recordContacts(md);
         writeVelocities(md);
     }
 

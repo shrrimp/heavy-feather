@@ -44,6 +44,8 @@ namespace hf {
 
         // Per link: its response in this sub-step's cache, or -1.
         std::vector<int> response;
+        // The contacts it solves with its joints: between two of its links, or one and the static world.
+        std::vector<int> contacts;
 
         // Kept from step to step, so a warm step allocates nothing.
         std::vector<Motion> twists;
@@ -63,6 +65,10 @@ namespace hf {
         double ln = 0.0, lt1 = 0.0, lt2 = 0.0;
         double lr1 = 0.0, lr2 = 0.0, ls = 0.0; // angular impulses resisting rolling (about t1, t2) and spin (about n)
         double lnMax = 0.0, vnImpact = 0.0;
+        // A contact solved in a machine's direct solve: that machine, its first row this sub-step (-1: none), and
+        // the friction directions of its rows.
+        int machine = -1, row = -1;
+        Vec3 t1{}, t2{};
     };
 
     // A contact end on a machine: its rows through the machine's mobility, n doubles each, in the arena as
@@ -208,6 +214,9 @@ namespace hf {
 
         // Contacts.cpp
         void beginContacts();
+        void contactRows(MachineData &md);         // its direct contacts' velocity rows, beside its joints'
+        void contactPositionRows(MachineData &md); // and their position rows
+        void recordContacts(MachineData &md);      // their answers, back into the contacts
         double contactDepth(const ContactData &c) const; // refreshed from the poses, after updateTurned
         void updateTurned();
         void prepareContacts();

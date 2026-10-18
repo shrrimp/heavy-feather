@@ -19,6 +19,9 @@ namespace hf {
         // normal force that resists them. A tyre's is a few millimetres; 0 leaves them free.
         double rolling = 0.0;
         double spinning = 0.0;
+        // Part of a mechanism's drive path: a cam on its follower, a gear on its gear, a pawl on its ratchet. Solved
+        // exactly with the joints of the machine both ends belong to (or one end, the other static); swept otherwise.
+        bool mechanism = false;
     };
 
 } // namespace hf

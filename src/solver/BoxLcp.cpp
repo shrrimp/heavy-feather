@@ -24,7 +24,7 @@ namespace hf {
 
     BoxLcpStats solveBoxLcp(const std::vector<double> &A, const std::vector<double> &b, const std::vector<double> &lo,
                             const std::vector<double> &hi, int m, std::vector<double> &x, std::vector<RowState> &state,
-                            BoxLcpScratch &s, int maxPasses) {
+                            BoxLcpScratch &s, const std::vector<Follow> &follow, int maxPasses) {
         BoxLcpStats st;
         x.resize(std::size_t(m), 0.0);
         state.resize(std::size_t(m), RowState::Free);
@@ -35,12 +35,32 @@ namespace hf {
         for (int i = 0; i < m; ++i) bScale = std::max(bScale, std::fabs(b[std::size_t(i)]));
         const double wTol = 1e-10 * bScale;
 
+        // The bounds in force: the given ones, with the following rows' moved to the answer so far. True if a row
+        // is now off its bound or outside it, and the free set must be solved again.
+        s.lo.assign(lo.begin(), lo.begin() + m);
+        s.hi.assign(hi.begin(), hi.begin() + m);
+        const auto rebound = [&] {
+            bool moved = false;
+            for (std::size_t i = 0; i < follow.size(); ++i) {
+                if (follow[i].row < 0) continue;
+                const double c = follow[i].ratio * std::max(0.0, x[std::size_t(follow[i].row)]);
+                s.lo[i] = -c;
+                s.hi[i] = c;
+                const double tol = 1e-12 * (1.0 + c);
+                if (state[i] == RowState::Free ? std::fabs(x[i]) > c + tol
+                                               : std::fabs(x[i] - boundOf(state[i], -c, c)) > tol)
+                    moved = true;
+            }
+            return moved;
+        };
+        rebound();
+
         // A warm start may name a bound that has since become infinite.
         for (int i = 0; i < m; ++i) {
             RowState &r = state[std::size_t(i)];
-            if (unbounded(lo[std::size_t(i)], hi[std::size_t(i)])) r = RowState::Free;
-            if (r == RowState::AtLo && !std::isfinite(lo[std::size_t(i)])) r = RowState::Free;
-            if (r == RowState::AtHi && !std::isfinite(hi[std::size_t(i)])) r = RowState::Free;
+            if (unbounded(s.lo[std::size_t(i)], s.hi[std::size_t(i)])) r = RowState::Free;
+            if (r == RowState::AtLo && !std::isfinite(s.lo[std::size_t(i)])) r = RowState::Free;
+            if (r == RowState::AtHi && !std::isfinite(s.hi[std::size_t(i)])) r = RowState::Free;
         }
 
         s.w.resize(std::size_t(m));
@@ -53,7 +73,7 @@ namespace hf {
             s.freeIdx.clear();
             for (int i = 0; i < m; ++i) {
                 if (state[std::size_t(i)] == RowState::Free) s.freeIdx.push_back(i);
-                else x[std::size_t(i)] = boundOf(state[std::size_t(i)], lo[std::size_t(i)], hi[std::size_t(i)]);
+                else x[std::size_t(i)] = boundOf(state[std::size_t(i)], s.lo[std::size_t(i)], s.hi[std::size_t(i)]);
             }
             const int k = static_cast<int>(s.freeIdx.size());
             if (k > 0) {
@@ -77,21 +97,27 @@ namespace hf {
             for (int i = 0; i < m; ++i) s.w[std::size_t(i)] = rowResidual(A, b, x, m, i);
             s.viol.clear();
             for (int i = 0; i < m; ++i) {
-                const double l = lo[std::size_t(i)], h = hi[std::size_t(i)], xi = x[std::size_t(i)];
+                const double l = s.lo[std::size_t(i)], h = s.hi[std::size_t(i)], xi = x[std::size_t(i)];
                 const double xTol = 1e-12 * (1.0 + std::fabs(xi));
                 switch (state[std::size_t(i)]) {
                     case RowState::Free:
                         if (xi < l - xTol || xi > h + xTol) s.viol.push_back(i);
                         break;
                     case RowState::AtLo:
-                        if (s.w[std::size_t(i)] < -wTol) s.viol.push_back(i);
+                        if (s.w[std::size_t(i)] < -wTol && l < h) s.viol.push_back(i);
                         break;
                     case RowState::AtHi:
-                        if (s.w[std::size_t(i)] > wTol) s.viol.push_back(i);
+                        if (s.w[std::size_t(i)] > wTol && l < h) s.viol.push_back(i);
                         break;
                 }
             }
-            if (s.viol.empty()) return st;
+            // Solved for these bounds. Moved to the answer, the following ones may ask for another round.
+            if (s.viol.empty()) {
+                if (!rebound()) return st;
+                bestCount = std::numeric_limits<int>::max();
+                stall = 0;
+                continue;
+            }
 
             const int count = static_cast<int>(s.viol.size());
             if (count < bestCount) {
@@ -103,7 +129,7 @@ namespace hf {
 
             const auto flip = [&](int i) {
                 RowState &r = state[std::size_t(i)];
-                if (r == RowState::Free) r = x[std::size_t(i)] < lo[std::size_t(i)] ? RowState::AtLo : RowState::AtHi;
+                if (r == RowState::Free) r = x[std::size_t(i)] < s.lo[std::size_t(i)] ? RowState::AtLo : RowState::AtHi;
                 else r = RowState::Free;
                 ++st.pivots;
             };
@@ -115,25 +141,29 @@ namespace hf {
 
         // Out of passes: projected Gauss-Seidel from wherever the pivoting got to.
         st.fallback = true;
+        rebound();
         for (int i = 0; i < m; ++i)
-            x[std::size_t(i)] = std::clamp(x[std::size_t(i)], lo[std::size_t(i)], hi[std::size_t(i)]);
-        for (int sweep = 0; sweep < 200; ++sweep)
+            x[std::size_t(i)] = std::clamp(x[std::size_t(i)], s.lo[std::size_t(i)], s.hi[std::size_t(i)]);
+        for (int sweep = 0; sweep < 200; ++sweep) {
+            rebound();
             for (int i = 0; i < m; ++i) {
                 const double d = A[std::size_t(i) * std::size_t(m) + std::size_t(i)];
                 if (!(d > 0.0)) continue;
                 const double w = rowResidual(A, b, x, m, i);
-                x[std::size_t(i)] = std::clamp(x[std::size_t(i)] - w / d, lo[std::size_t(i)], hi[std::size_t(i)]);
+                x[std::size_t(i)] = std::clamp(x[std::size_t(i)] - w / d, s.lo[std::size_t(i)], s.hi[std::size_t(i)]);
             }
+        }
 
+        rebound();
         double worst = 0.0;
         for (int i = 0; i < m; ++i) {
             const double w = rowResidual(A, b, x, m, i);
             const double xi = x[std::size_t(i)];
             RowState &r = state[std::size_t(i)];
-            if (xi <= lo[std::size_t(i)]) {
+            if (xi <= s.lo[std::size_t(i)]) {
                 r = RowState::AtLo;
-                worst = std::max(worst, std::max(0.0, -w));
-            } else if (xi >= hi[std::size_t(i)]) {
+                if (s.lo[std::size_t(i)] < s.hi[std::size_t(i)]) worst = std::max(worst, std::max(0.0, -w));
+            } else if (xi >= s.hi[std::size_t(i)]) {
                 r = RowState::AtHi;
                 worst = std::max(worst, std::max(0.0, w));
             } else {

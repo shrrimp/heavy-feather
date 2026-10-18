@@ -5,6 +5,7 @@
 #include <tuple>
 #include <vector>
 
+#include "contact/ContactParams.hpp"
 #include "math/Dense.hpp"
 #include "world/WorldImpl.hpp"
 
@@ -12,12 +13,6 @@ namespace hf {
 
     namespace {
 
-        constexpr double kContactHertz = 120.0;
-        constexpr double kContactDamping = 4.0; // a larger ratio makes the row stiffer: 4 is the quiet point
-        constexpr double kSlop = 0.002;         // m of penetration left alone
-        constexpr double kGapReach = 2.0;       // a gap is solved once its approach could close it this many times over
-        constexpr double kMaxBias = 3.0;        // m/s: the fastest penetration is pushed out
-        constexpr double kRestitutionMinSpeed = 0.5;
         constexpr int kRestitutionIterations = 4;
         constexpr int kSolverIterations = 16; // per step, split across the sub-steps
         constexpr int kMinSolverIterations = 8;
@@ -25,13 +20,13 @@ namespace hf {
         constexpr int kRelaxIterations = 2;
         constexpr int kPositionIterations = 16;
 
-        // A stable tangent pair for any unit normal; (n, t1, t2) is right-handed.
-        void contactBasis(const Vec3 &n, Vec3 &t1, Vec3 &t2) {
-            const double s = std::copysign(1.0, n.z);
-            const double a = -1.0 / (s + n.z);
-            const double b = n.x * n.y * a;
-            t1 = {1.0 + s * n.x * n.x * a, s * b, -s * n.x};
-            t2 = {b, s + n.y * n.y * a, -n.y};
+        // The machine that solves a mechanism contact with its joints: the one both ends are on, or one end with the
+        // other static. Any other contact is swept.
+        int directMachine(const Contact &k, const Group &a, const Group &b) {
+            if (!k.mechanism) return -1;
+            if (a.machine >= 0 && (b.machine == a.machine || b.isStatic)) return a.machine;
+            if (b.machine >= 0 && a.isStatic) return b.machine;
+            return -1;
         }
 
     } // namespace
@@ -78,6 +73,8 @@ namespace hf {
             c.lnMax = 0.0;
             const Vec3 va = ga.v + cross(ga.w, c.rA), vb = gb.v + cross(gb.w, c.rB);
             c.vnImpact = dot(vb - va, c.n);
+            c.machine = directMachine(c.in, ga, gb);
+            c.row = -1;
             contacts[kept++] = c;
         }
         contacts.resize(kept);
@@ -106,6 +103,10 @@ namespace hf {
         contactScratch.resize(contacts.size());
         for (const ContactData &c : contacts) contactScratch[depthStart[depthOf(c)]++] = c;
         contacts.swap(contactScratch);
+
+        for (MachineData &md : machines) md.contacts.clear();
+        for (std::size_t i = 0; i < contacts.size(); ++i)
+            if (contacts[i].machine >= 0) machines[std::size_t(contacts[i].machine)].contacts.push_back(int(i));
     }
 
     // The warm start for the next step. Only this step's contacts are kept, so the cache can't grow.
@@ -162,9 +163,9 @@ namespace hf {
         responses.clear();
         responseArena.clear();
         for (std::vector<LinkRun> &r : runs) r.assign(machines.size(), LinkRun{});
-        updateTurned();
         for (std::size_t ci = 0; ci < contacts.size(); ++ci) {
             ContactData &c = contacts[ci];
+            if (c.machine >= 0) continue;
             Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
             c.depth = contactDepth(c);
 
@@ -465,6 +466,14 @@ namespace hf {
                 apply(*this, p, c, dn, 0.0, 0.0);
             }
         flushRuns(*this, false);
+        for (int k = 0; k < kRestitutionIterations; ++k)
+            for (MachineData &md : machines)
+                for (int ci : md.contacts) {
+                    const ContactData &c = contacts[std::size_t(ci)];
+                    if (c.row < 0 || c.in.restitution <= 0.0 || c.vnImpact > -kRestitutionMinSpeed || c.lnMax <= 0.0)
+                        continue;
+                    md.m.pushRow(c.row, -c.in.restitution * c.vnImpact);
+                }
     }
 
 } // namespace hf

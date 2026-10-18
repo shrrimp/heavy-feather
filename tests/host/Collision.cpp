@@ -29,6 +29,7 @@ namespace host {
                 c.restitution = std::max(a.restitution, b.restitution);
                 c.rolling = std::max(a.rolling, b.rolling);
                 c.spinning = std::max(a.spinning, b.spinning);
+                c.mechanism = a.mechanism && b.mechanism;
                 out.push_back(c);
             }
         };

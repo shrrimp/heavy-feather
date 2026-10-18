@@ -22,6 +22,7 @@ namespace host {
         double friction = 0.6;
         double restitution = 0.0;
         double rolling = 0.0, spinning = 0.0; // lever arms, m
+        bool mechanism = false;               // touching another mechanism part, a drive-path contact
     };
 
     struct Pose {
