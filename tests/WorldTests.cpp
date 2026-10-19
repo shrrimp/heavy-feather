@@ -662,3 +662,18 @@ TEST_CASE("a cylinder in a loop lifts a heavy boom to a jumped target at its spe
     run(w, 0.75);
     CHECK_MESSAGE(std::fabs(w.jointPosition(piston) - 0.2) < 1e-3, "and arrives");
 }
+
+TEST_CASE("a block at 30 m/s stops at a wall a tenth of its step thick") {
+    // Half a metre a step against 5 cm of wall: the host looks as far as the block can get, and the gap it reports
+    // is closed within the sub-step that reaches it, no sooner.
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    host::Host h(settings);
+    h.addBox(Vec3{2.0, 1.0, 0}, Quat{}, Vec3{0.025, 1.0, 1.0}, 0.0);
+    const BodyId block = h.addBox(Vec3{0, 1.0, 0}, Quat{}, Vec3{0.1, 0.1, 0.1}, 2.0);
+    h.world.setVelocity(block, Vec3{30.0, 0, 0}, Vec3{});
+    for (int i = 0; i < 30; ++i) h.step(kDt);
+    CHECK_MESSAGE(h.world.position(block).x < 1.875 + 0.005, "it stops on the near face");
+    CHECK_MESSAGE(h.world.position(block).x > 1.8, "against it, not short of it");
+    CHECK_MESSAGE(std::fabs(h.world.velocity(block).x) < 0.1, "and stays there");
+}

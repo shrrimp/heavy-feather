@@ -46,6 +46,8 @@ namespace host {
         };
         std::vector<Span> spans_;
         std::vector<Pose> poses_;
+        std::vector<double> travel_; // how far each shape can move before the next detection
+        double lookahead_ = 1.2 / 60.0;
         std::vector<int> planes_;
     };
 

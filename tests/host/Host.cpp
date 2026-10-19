@@ -106,6 +106,7 @@ namespace host {
     void Host::detect() {
         contacts.clear();
         poses_.resize(shapes.size());
+        travel_.resize(shapes.size());
         spans_.clear();
         planes_.clear();
         for (std::size_t i = 0; i < shapes.size(); ++i) {
@@ -113,10 +114,16 @@ namespace host {
             const Quat q = world.orientation(s.body);
             poses_[i] = {world.position(s.body) + q * s.offset, toMat3(q)};
             if (s.kind == ShapeKind::Plane) {
+                travel_[i] = 0.0;
                 planes_.push_back(int(i));
                 continue;
             }
-            const double r = boundingRadius(s) + margin;
+            // A fast body is looked for as far as it can get, so the world gets the gap and stops it at the wall. A
+            // shape off its body's centre swings with the body's spin too.
+            const Vec3 w = world.angularVelocity(s.body);
+            const Vec3 v = world.velocity(s.body) + cross(w, poses_[i].c - world.position(s.body));
+            travel_[i] = (length(v) + length(w) * boundingRadius(s)) * lookahead_;
+            const double r = boundingRadius(s) + margin + travel_[i];
             spans_.push_back({poses_[i].c.x - r, poses_[i].c.x + r, int(i)});
         }
         std::sort(spans_.begin(), spans_.end(),
@@ -127,14 +134,15 @@ namespace host {
             if (a.body == b.body || ignored_.count(pairKey(a.body, b.body))) return;
             if (!world.contains(a.body) || !world.contains(b.body)) return;
             const std::uint64_t base = (std::uint64_t(i) << 40) | (std::uint64_t(j) << 16);
-            collide(a, poses_[std::size_t(i)], b, poses_[std::size_t(j)], margin, base, contacts);
+            const double reach = margin + travel_[std::size_t(i)] + travel_[std::size_t(j)];
+            collide(a, poses_[std::size_t(i)], b, poses_[std::size_t(j)], reach, base, contacts);
         };
         for (std::size_t k = 0; k < spans_.size(); ++k)
             for (std::size_t m = k + 1; m < spans_.size() && spans_[m].lo <= spans_[k].hi; ++m) {
                 const int i = std::min(spans_[k].shape, spans_[m].shape),
                           j = std::max(spans_[k].shape, spans_[m].shape);
-                const double reach =
-                    boundingRadius(shapes[std::size_t(i)]) + boundingRadius(shapes[std::size_t(j)]) + margin;
+                const double reach = boundingRadius(shapes[std::size_t(i)]) + boundingRadius(shapes[std::size_t(j)]) +
+                                     margin + travel_[std::size_t(i)] + travel_[std::size_t(j)];
                 if (length(poses_[std::size_t(i)].c - poses_[std::size_t(j)].c) <= reach) test(i, j);
             }
         for (int p : planes_)
@@ -142,6 +150,7 @@ namespace host {
     }
 
     void Host::step(double dt) {
+        lookahead_ = 1.2 * dt;
         detect();
         world.clearContacts();
         for (const hf::Contact &c : contacts) world.addContact(c);
