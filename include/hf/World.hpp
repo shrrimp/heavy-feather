@@ -14,12 +14,15 @@ namespace hf {
         Vec3 gravity{0.0, -9.81, 0.0};
         int substeps = 16;
         double maxCorrection = 0.05; // m: the furthest a position correction may move a body in one sub-step
+        bool sleeping = true;        // still bodies stop being stepped until something wakes them
     };
 
     struct WorldStats {
         int bodies = 0, joints = 0, contacts = 0;
         int machines = 0, links = 0, dofs = 0, rows = 0;
         int lcpPivots = 0, lcpFallbacks = 0;
+        int stepped = 0, asleep = 0; // bodies
+        int islands = 0;             // stepped bodies touching or jointed to each other, apart from the rest
     };
 
     // Bodies, joints and the host's contacts in; poses out. Jointed bodies are grouped into machines, each solved
@@ -47,8 +50,12 @@ namespace hf {
         void setVelocity(BodyId body, const Vec3 &velocity, const Vec3 &angularVelocity);
         // New mass and inertia (about the centre of mass, body axes), as an edit changes them; the body carries on.
         void setMassProperties(BodyId body, double mass, const Mat3 &inertia);
-        // A static body doesn't move and isn't pushed: a host's sleeping body, or one pinned in place.
+        // A static body doesn't move and isn't pushed: one pinned in place.
         void setStatic(BodyId body, bool isStatic);
+        // A body still for long enough falls asleep, and isn't stepped until a push, an edit or an awake neighbour
+        // wakes it. Its contacts still matter: they tell the world what it rests on, at no cost to the solve.
+        bool asleep(BodyId body) const;
+        void wake(BodyId body);
 
         // A force at a world point, or a torque, for the next step only.
         void applyForce(BodyId body, const Vec3 &force, const Vec3 &point);

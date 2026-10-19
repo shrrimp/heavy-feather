@@ -46,6 +46,8 @@ namespace hf {
         std::vector<int> response;
         // The contacts it solves with its joints: between two of its links, or one and the static world.
         std::vector<int> contacts;
+        double correction = 0.0; // how far the position pass moved its links in the last sub-step, at most
+        bool frozen = false;     // asleep this step, every link of it
 
         // Kept from step to step, so a warm step allocates nothing.
         std::vector<Motion> twists;
@@ -138,6 +140,22 @@ namespace hf {
         ContactBlock blocks[2];
     };
 
+    // Sleep.cpp: a link between two dynamic groups, through the host's contacts or a joint, for the flood.
+    struct SleepLink {
+        int a = 0, b = 0;
+        bool touching = false;    // a contact this step
+        bool approaching = false; // and closing
+        bool conducts = false;    // touching now or a step or two ago: force travels across it
+        bool jointed = false;
+    };
+
+    // When two bodies last touched, so that a support that stops touching wakes what it held.
+    struct Touch {
+        std::uint64_t a = 0, b = 0; // each body's index and generation, a < b
+        std::uint64_t step = 0;
+        bool operator<(const Touch &o) const { return std::tie(a, b) < std::tie(o.a, o.b); }
+    };
+
     struct ContactKey {
         BodyId a, b;
         std::uint64_t feature = 0;
@@ -189,6 +207,13 @@ namespace hf {
         std::vector<ContactData> contactScratch;
         WorldStats stats;
 
+        std::uint64_t stepCount = 0;
+        std::vector<SleepLink> sleepLinks;
+        std::vector<Touch> touches, touchScratch;
+        std::vector<int> linkStart, linkOf, floodDepth, floodQueue, unitOf, unitSteps, islandOf;
+        int islands = 0;
+        std::vector<std::uint8_t> seeded, reached, unitStepped, unitStill, unitAsleep, unitVetoed;
+
         BodySlot *body(BodyId id);
         const BodySlot *body(BodyId id) const;
         JointSlot *joint(JointId id);
@@ -226,6 +251,11 @@ namespace hf {
         void solveContactPositions();
         void restitution();
         void storeContacts();
+
+        // Sleep.cpp
+        void beginSleep(); // who is stepped: the awake, and what they reach
+        void endSleep();   // who falls asleep, and who lost the support they slept on
+        void wakePartners(BodyId id); // whatever it touched lately
 
         void step(double dt);
     };

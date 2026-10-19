@@ -1,5 +1,5 @@
-// The cost of a step on the large stress scenes: the world's step alone, the host's detection left out. Budgets are a
-// few times what a desktop CPU takes, unthrottled: a laptop saving power can run several times slower.
+// The cost of a step on the large stress scenes, kept awake: the world's step alone, the host's detection left out.
+// Budgets are a few times what a desktop CPU takes, unthrottled: a laptop saving power can run several times slower.
 //   hf-bench            prints the table
 //   hf-bench --check    also fails when a scene's mean is over its budget
 //   hf-bench <name>     only the scenes whose name contains it
@@ -63,6 +63,9 @@ int main(int argc, char **argv) {
         if (only && !std::strstr(c.name, only)) continue;
         Scene s = c.build();
         Host &h = *s.host;
+        hf::WorldSettings awake = h.world.settings();
+        awake.sleeping = false;
+        h.world.setSettings(awake);
         for (int i = 0; i < 60; ++i) s.step(i, kDt);
 
         std::vector<double> times;

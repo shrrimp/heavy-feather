@@ -110,7 +110,7 @@ namespace hf {
 
     void addMachineSides(World::Impl &I, ContactPrep &p, const ContactData &c) {
         const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
-        if (a.machine >= 0 && a.machine == b.machine) {
+        if (machineOf(a) >= 0 && machineOf(a) == machineOf(b)) {
             Mobility k;
             addLinkSide(I, p, c, a, p.r1, -1.0, k);
             addLinkSide(I, p, c, b, p.r2, 1.0, k);
@@ -118,12 +118,12 @@ namespace hf {
             addMobility(p, k);
             return;
         }
-        if (a.machine >= 0) {
+        if (machineOf(a) >= 0) {
             Mobility k;
             addLinkSide(I, p, c, a, p.r1, -1.0, k);
             addMobility(p, k);
         }
-        if (b.machine >= 0) {
+        if (machineOf(b) >= 0) {
             Mobility k;
             addLinkSide(I, p, c, b, p.r2, 1.0, k);
             addMobility(p, k);

@@ -27,6 +27,9 @@ mass of everything attached to it.
   its friction bounded by however hard it ends up pushing.
 - **World**: what the host talks to. It takes bodies, joints and contacts, works out the
   machines, and steps them.
+- **Sleep**: a body still for a few steps falls asleep and stops being stepped, until a push, an
+  edit or an awake neighbour wakes it. A machine sleeps whole. What is stepped splits into
+  islands, the bodies touching or jointed to each other.
 
 Heavy Feather does no collision detection. The host finds contacts with its own, hands them
 over, steps the world, and reads the poses back.

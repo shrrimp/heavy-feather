@@ -417,6 +417,7 @@ namespace hf {
             const double radius = groups[std::size_t(md.groupOfLink[l])].radius;
             worst = std::max(worst, (length(vc) + length(V.w) * radius) * h);
         }
+        md.correction = std::isfinite(worst) ? worst : 0.0;
         m.keepPseudo();
         if (!std::isfinite(worst)) m.scalePseudo(0.0);
         else if (worst > settings.maxCorrection) m.scalePseudo(settings.maxCorrection / worst);

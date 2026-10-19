@@ -24,8 +24,9 @@ namespace hf {
         // other static. Any other contact is swept.
         int directMachine(const Contact &k, const Group &a, const Group &b) {
             if (!k.mechanism) return -1;
-            if (a.machine >= 0 && (b.machine == a.machine || b.isStatic)) return a.machine;
-            if (b.machine >= 0 && a.isStatic) return b.machine;
+            const int ma = machineOf(a), mb = machineOf(b);
+            if (ma >= 0 && (mb == ma || !moves(b))) return ma;
+            if (mb >= 0 && !moves(a)) return mb;
             return -1;
         }
 
@@ -52,7 +53,7 @@ namespace hf {
             const BodySlot *a = body(c.in.a), *b = body(c.in.b);
             if (!a || !b || a->group == b->group) continue;
             const Group &ga = groups[std::size_t(a->group)], &gb = groups[std::size_t(b->group)];
-            if (ga.isStatic && gb.isStatic) continue;
+            if (!moves(ga) && !moves(gb)) continue;
             c.ga = a->group;
             c.gb = b->group;
             c.rA = c.in.point - ga.c;
@@ -83,7 +84,7 @@ namespace hf {
         // separate them from something static. A counting sort, so equal depths keep the host's order.
         groupDepth.assign(groups.size(), 1 << 30);
         for (std::size_t g = 0; g < groups.size(); ++g)
-            if (groups[g].isStatic) groupDepth[g] = 0;
+            if (!moves(groups[g])) groupDepth[g] = 0;
         for (bool changed = true; changed;) {
             changed = false;
             for (const ContactData &c : contacts) {
@@ -134,8 +135,8 @@ namespace hf {
         Vec3 turnVelocity(World::Impl &I, const ContactPrep &p, const ContactData &c) {
             const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
             Vec3 w{};
-            if (b.machine < 0) w += b.w;
-            if (a.machine < 0) w -= a.w;
+            if (machineOf(b) < 0) w += b.w;
+            if (machineOf(a) < 0) w -= a.w;
             double m[6] = {};
             machineVelocity(I, p, false, 6, m);
             return {dot(w, p.t1) + m[3], dot(w, p.t2) + m[4], dot(w, c.n) + m[5]};
@@ -185,8 +186,8 @@ namespace hf {
             a.pv = a.pw = b.pv = b.pw = Vec3{};
 
             // A machine end's mass is its whole linkage's, through W: its rigid terms are zero.
-            const bool rigidA = !a.isStatic && a.machine < 0, rigidB = !b.isStatic && b.machine < 0;
-            if (!rigidA && !rigidB && a.machine < 0 && b.machine < 0) continue;
+            const bool rigidA = moves(a) && machineOf(a) < 0, rigidB = moves(b) && machineOf(b) < 0;
+            if (!rigidA && !rigidB && machineOf(a) < 0 && machineOf(b) < 0) continue;
             p.imA = rigidA ? a.invMass : 0.0;
             p.imB = rigidB ? b.invMass : 0.0;
             p.invIwA = rigidA ? a.invInertiaWorld() : Mat3{};
@@ -249,8 +250,8 @@ namespace hf {
         RowVelocity rowVelocity(World::Impl &I, const ContactPrep &p, const ContactData &c, bool pseudo) {
             const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
             Vec3 vrel{};
-            if (b.machine < 0) vrel += pseudo ? b.pv + cross(b.pw, p.r2) : b.v + cross(b.w, p.r2);
-            if (a.machine < 0) vrel -= pseudo ? a.pv + cross(a.pw, p.r1) : a.v + cross(a.w, p.r1);
+            if (machineOf(b) < 0) vrel += pseudo ? b.pv + cross(b.pw, p.r2) : b.v + cross(b.w, p.r2);
+            if (machineOf(a) < 0) vrel -= pseudo ? a.pv + cross(a.pw, p.r1) : a.v + cross(a.w, p.r1);
             double m[3] = {};
             machineVelocity(I, p, pseudo, pseudo ? 1 : 3, m);
             return {dot(vrel, c.n) + m[0], dot(vrel, p.t1) + m[1], dot(vrel, p.t2) + m[2]};
@@ -329,7 +330,7 @@ namespace hf {
 
         void sweepBounded(World::Impl &I) {
             for (MachineData &md : I.machines)
-                if (md.m.boundedRows()) md.m.sweepBounded();
+                if (!md.frozen && md.m.boundedRows()) md.m.sweepBounded();
         }
 
     } // namespace
@@ -349,22 +350,23 @@ namespace hf {
             sp.n = (pA - pB) / len;
             sp.r1 = pA - a.c;
             sp.r2 = pB - b.c;
-            const bool rigidA = !a.isStatic && a.machine < 0, rigidB = !b.isStatic && b.machine < 0;
+            const bool rigidA = moves(a) && machineOf(a) < 0, rigidB = moves(b) && machineOf(b) < 0;
             sp.imA = rigidA ? a.invMass : 0.0;
             sp.imB = rigidB ? b.invMass : 0.0;
             sp.imR1n = (rigidA ? a.invInertiaWorld() : Mat3{}) * cross(sp.r1, sp.n);
             sp.imR2n = (rigidB ? b.invInertiaWorld() : Mat3{}) * cross(sp.r2, sp.n);
             sp.k = sp.imA + sp.imB + dot(cross(sp.r1, sp.n), sp.imR1n) + dot(cross(sp.r2, sp.n), sp.imR2n);
 
-            for (int mi : {a.machine, b.machine}) {
+            if (!moves(a) && !moves(b)) continue;
+            for (int mi : {machineOf(a), machineOf(b)}) {
                 if (mi < 0 || (sp.nb == 1 && sp.blocks[0].machine == mi)) continue;
                 Machine &m = machines[std::size_t(mi)].m;
                 const int n = m.dofs();
                 ContactBlock blk{mi, arena.size(), n};
                 arena.resize(blk.off + 2 * std::size_t(n), 0.0);
                 double *g = arena.data() + blk.off, *w = g + n;
-                if (a.machine == mi) m.art.addPointRow(a.link, pA, sp.n, 1.0, g);
-                if (b.machine == mi) m.art.addPointRow(b.link, pB, sp.n, -1.0, g);
+                if (machineOf(a) == mi) m.art.addPointRow(a.link, pA, sp.n, 1.0, g);
+                if (machineOf(b) == mi) m.art.addPointRow(b.link, pB, sp.n, -1.0, g);
                 const double unheld = m.mobility(g, w);
                 sp.k += std::max(dot(g, w, std::size_t(n)), kLockedMobility * unheld);
                 sp.blocks[sp.nb++] = blk;
@@ -379,8 +381,8 @@ namespace hf {
         void sweepSpring(World::Impl &I, SpringPrep &sp) {
             Group &a = I.groups[std::size_t(sp.a)], &b = I.groups[std::size_t(sp.b)];
             double v = 0.0;
-            if (a.machine < 0) v += dot(a.v + cross(a.w, sp.r1), sp.n);
-            if (b.machine < 0) v -= dot(b.v + cross(b.w, sp.r2), sp.n);
+            if (machineOf(a) < 0) v += dot(a.v + cross(a.w, sp.r1), sp.n);
+            if (machineOf(b) < 0) v -= dot(b.v + cross(b.w, sp.r2), sp.n);
             for (int k = 0; k < sp.nb; ++k) {
                 const ContactBlock &blk = sp.blocks[k];
                 const std::vector<double> &qd = I.machines[std::size_t(blk.machine)].m.art.qdot;

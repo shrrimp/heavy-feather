@@ -21,6 +21,10 @@ namespace hf {
         Quat rot{};    // its orientation in the group's frame
 
         Vec3 force{}, torque{}; // for the next step, about its centre of mass
+
+        // Asleep, it isn't stepped until something wakes it. Carried across steps, and across machine rebuilds.
+        bool asleep = false, wakeNext = false;
+        int stillSteps = 0;
     };
 
     struct JointSlot {
@@ -61,12 +65,19 @@ namespace hf {
         Vec3 force{}, torque{}; // for this step, about c
         Vec3 pv{}, pw{};        // pseudo velocities: the position pass, one sub-step only
         int machine = -1, link = -1;
+        bool frozen = false;     // not stepped this step: asleep, and nothing awake reached it
+        int island = -1;         // stepped: which island, the groups touching or jointed to it; -1 otherwise
+        double correction = 0.0; // how far the position pass moved it in the last sub-step
 
         Mat3 invInertiaWorld() const {
             const Mat3 R = toMat3(q);
             return R * invInertiaBody * transpose(R);
         }
     };
+
+    // Moved by the solver this step: neither static nor asleep. And the machine it moves with, if any.
+    inline bool moves(const Group &g) { return !g.isStatic && !g.frozen; }
+    inline int machineOf(const Group &g) { return g.frozen ? -1 : g.machine; }
 
     // A row's spring, from a frequency and a damping ratio.
     struct SoftParams {

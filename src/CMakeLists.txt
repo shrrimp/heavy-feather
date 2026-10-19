@@ -19,6 +19,7 @@ set(HF_SOURCES
   world/Groups.cpp
   world/MachineRows.cpp
   world/Machines.cpp
+  world/Sleep.cpp
   world/Step.cpp
   world/World.cpp)
 

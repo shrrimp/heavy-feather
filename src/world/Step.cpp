@@ -7,7 +7,7 @@ namespace hf {
 
     namespace {
 
-        bool rigid(const Group &g) { return !g.isStatic && g.machine < 0; }
+        bool rigid(const Group &g) { return !g.isStatic && !g.frozen && g.machine < 0; }
 
         // The spin's own torque, ω × Iω, at the step's midpoint: I(ω' − ω) + h ω_m × Iω_m = 0 in the body frame,
         // solved by Newton. The midpoint keeps a free body's energy and angular momentum; taken at the start, a thin
@@ -27,6 +27,7 @@ namespace hf {
         }
 
         void integrateRigid(Group &g, double h) {
+            g.correction = (length(g.pv) + length(g.pw) * g.radius) * h;
             g.c += (g.v + g.pv) * h;
             const Vec3 w = g.w + g.pw;
             g.q = normalize(g.q + Quat{0.0, 0.5 * h * w} * g.q);
@@ -57,6 +58,8 @@ namespace hf {
             buildMachines();
             dirty = false;
         }
+        beginSleep();
+        const auto stepped = [](const MachineData &md) { return !md.frozen; };
 
         for (Group &g : groups) g.force = g.torque = Vec3{};
         for (BodySlot &b : bodies) {
@@ -68,7 +71,8 @@ namespace hf {
             b.force = b.torque = Vec3{};
         }
 
-        for (MachineData &md : machines) readState(md);
+        for (MachineData &md : machines)
+            if (stepped(md)) readState(md);
         beginDrives(dt);
         beginContacts();
 
@@ -85,44 +89,59 @@ namespace hf {
                 gyroscopic(g, h);
             }
             updateTurned();
-            for (MachineData &md : machines) solveInternal(md);
+            for (MachineData &md : machines)
+                if (stepped(md)) solveInternal(md);
 
             prepareContacts();
             prepareSprings();
             solveContacts();
-            for (MachineData &md : machines) afterContacts(md);
+            for (MachineData &md : machines)
+                if (stepped(md)) afterContacts(md);
 
-            for (MachineData &md : machines) solvePositions(md);
+            for (MachineData &md : machines)
+                if (stepped(md)) solvePositions(md);
             solveContactPositions();
             for (Group &g : groups)
                 if (rigid(g)) clampCorrection(g, h, settings.maxCorrection);
 
-            for (MachineData &md : machines) integrate(md);
+            for (MachineData &md : machines)
+                if (stepped(md)) integrate(md);
             for (Group &g : groups)
                 if (rigid(g)) integrateRigid(g, h);
 
             relaxContacts();
-            for (MachineData &md : machines) writeVelocities(md);
+            for (MachineData &md : machines)
+                if (stepped(md)) writeVelocities(md);
         }
 
         for (JointSlot &j : joints)
             if (j.alive) j.targetFrom = j.targetTo;
         restitution();
-        for (MachineData &md : machines) writeVelocities(md);
+        for (MachineData &md : machines)
+            if (stepped(md)) writeVelocities(md);
         storeContacts();
         carriedRows.clear();
+        endSleep();
 
         stats = WorldStats{};
         stats.contacts = int(prep.size());
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
-            for (int ci : md.contacts) stats.contacts += contacts[std::size_t(ci)].row >= 0;
             stats.links += int(md.groupOfLink.size());
             stats.dofs += md.m.dofs();
+            if (!stepped(md)) continue;
+            for (int ci : md.contacts) stats.contacts += contacts[std::size_t(ci)].row >= 0;
             stats.rows += md.m.rowCount();
             stats.lcpPivots += md.m.stats.lcpPivots;
             stats.lcpFallbacks += md.m.stats.lcpFallbacks;
         }
+        for (const BodySlot &b : bodies) {
+            if (!b.alive) continue;
+            const Group &g = groups[std::size_t(b.group)];
+            stats.stepped += !g.isStatic && !g.frozen;
+            stats.asleep += b.asleep;
+        }
+        stats.islands = islands;
     }
 
 } // namespace hf

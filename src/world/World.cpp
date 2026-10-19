@@ -7,6 +7,21 @@
 
 namespace hf {
 
+    namespace {
+
+        void wakeUp(BodySlot *b) {
+            if (!b) return;
+            b->asleep = false;
+            b->stillSteps = 0;
+        }
+
+        void wakeEnds(World::Impl &I, const JointDesc &d) {
+            wakeUp(I.body(d.a));
+            wakeUp(I.body(d.b));
+        }
+
+    } // namespace
+
     World::World(const WorldSettings &settings) : impl_(std::make_unique<Impl>()) {
         impl_->settings = settings;
         impl_->groups.emplace_back();
@@ -17,7 +32,10 @@ namespace hf {
     World &World::operator=(World &&) noexcept = default;
 
     const WorldSettings &World::settings() const { return impl_->settings; }
-    void World::setSettings(const WorldSettings &settings) { impl_->settings = settings; }
+    void World::setSettings(const WorldSettings &settings) {
+        impl_->settings = settings;
+        for (BodySlot &b : impl_->bodies) wakeUp(&b);
+    }
 
     BodySlot *World::Impl::body(BodyId id) {
         if (id.index >= bodies.size()) return nullptr;
@@ -50,6 +68,8 @@ namespace hf {
         b.desc.orientation = normalize(desc.orientation);
         b.alive = true;
         b.group = -1;
+        b.asleep = b.wakeNext = false;
+        b.stillSteps = 0;
         I.dirty = true;
         return {index, b.generation};
     }
@@ -58,6 +78,7 @@ namespace hf {
         Impl &I = *impl_;
         BodySlot *b = I.body(id);
         if (!b) return;
+        I.wakePartners(id);
         for (std::uint32_t k = 0; k < I.joints.size(); ++k) {
             const JointSlot &j = I.joints[k];
             if (j.alive && (j.desc.a == id || j.desc.b == id)) removeJoint({k, j.generation});
@@ -70,6 +91,13 @@ namespace hf {
     }
 
     bool World::contains(BodyId id) const { return impl_->body(id) != nullptr; }
+
+    bool World::asleep(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        return b && b->asleep;
+    }
+
+    void World::wake(BodyId id) { wakeUp(impl_->body(id)); }
 
     Vec3 World::position(BodyId id) const {
         const BodySlot *b = impl_->body(id);
@@ -113,6 +141,8 @@ namespace hf {
         b->desc.mass = mass;
         b->desc.inertia = inertia;
         impl_->dirty = true;
+        wakeUp(b);
+        impl_->wakePartners(id);
     }
 
     void World::setStatic(BodyId id, bool isStatic) {
@@ -120,12 +150,18 @@ namespace hf {
         if (!b || b->desc.isStatic == isStatic) return;
         b->desc.isStatic = isStatic;
         impl_->dirty = true;
+        wakeUp(b);
     }
 
     void World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
         BodySlot *b = impl_->body(id);
         if (!b) return;
         const Quat qb = normalize(orientation);
+        // A host writing back the pose it read isn't a push: only a real move wakes it.
+        if (length(position - this->position(id)) > 1e-9 || std::fabs(dot(qb, this->orientation(id))) < 1.0 - 1e-12) {
+            wakeUp(b);
+            impl_->wakePartners(id);
+        }
         b->desc.position = position;
         b->desc.orientation = qb;
         if (b->group < 0) return;
@@ -137,6 +173,8 @@ namespace hf {
     void World::setVelocity(BodyId id, const Vec3 &velocity, const Vec3 &angularVelocity) {
         BodySlot *b = impl_->body(id);
         if (!b) return;
+        if (length(velocity - this->velocity(id)) > 1e-9 || length(angularVelocity - this->angularVelocity(id)) > 1e-9)
+            wakeUp(b);
         b->desc.velocity = velocity;
         b->desc.angularVelocity = angularVelocity;
         if (b->group < 0) return;
@@ -149,13 +187,16 @@ namespace hf {
     void World::applyForce(BodyId id, const Vec3 &force, const Vec3 &point) {
         BodySlot *b = impl_->body(id);
         if (!b) return;
+        if (force != Vec3{}) wakeUp(b);
         b->force += force;
         b->torque += cross(point - position(id), force);
     }
 
     void World::applyTorque(BodyId id, const Vec3 &torque) {
         BodySlot *b = impl_->body(id);
-        if (b) b->torque += torque;
+        if (!b) return;
+        if (torque != Vec3{}) wakeUp(b);
+        b->torque += torque;
     }
 
     JointId World::addJoint(const JointDesc &desc) {
@@ -179,6 +220,7 @@ namespace hf {
         j.alive = true;
         j.targetFrom = j.targetTo = j.targetEff = desc.target;
         I.dirty = true;
+        wakeEnds(I, desc);
         // A piston's or servo's setpoint starts where it is, and travels to its target at the drive's speed. One
         // born a hair off starts on its target: twin cylinders authored a fraction of a millimetre apart would
         // otherwise ask the solve for two speeds on one freedom.
@@ -194,6 +236,7 @@ namespace hf {
         Impl &I = *impl_;
         JointSlot *j = I.joint(id);
         if (!j) return;
+        wakeEnds(I, j->desc);
         j->alive = false;
         ++j->generation;
         I.freeJoints.push_back(id.index);
@@ -205,13 +248,16 @@ namespace hf {
     void World::setTarget(JointId id, double target) {
         JointSlot *j = impl_->joint(id);
         if (!j) return;
-        j->desc.target = positionDrive(j->desc.type) ? std::clamp(target, j->desc.min, j->desc.max) : target;
+        const double t = positionDrive(j->desc.type) ? std::clamp(target, j->desc.min, j->desc.max) : target;
+        if (t != j->desc.target) wakeEnds(*impl_, j->desc);
+        j->desc.target = t;
         j->commanded = true;
     }
 
     void World::setLever(JointId id, double lever) {
         JointSlot *j = impl_->joint(id);
         if (!j) return;
+        if (std::clamp(lever, -1.0, 1.0) != j->lever) wakeEnds(*impl_, j->desc);
         j->lever = std::clamp(lever, -1.0, 1.0);
         if (j->desc.type == JointType::Motor) j->desc.target = j->lever * j->desc.speed;
     }

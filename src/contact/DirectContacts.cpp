@@ -26,7 +26,7 @@ namespace hf {
 
         Ends endsOf(const World::Impl &I, const ContactData &c) {
             const Group &a = I.groups[std::size_t(c.ga)], &b = I.groups[std::size_t(c.gb)];
-            return {a.machine >= 0 ? a.link : -1, b.machine >= 0 ? b.link : -1, a.c + c.rA, b.c + c.rB};
+            return {machineOf(a) >= 0 ? a.link : -1, machineOf(b) >= 0 ? b.link : -1, a.c + c.rA, b.c + c.rB};
         }
 
         // B's point less A's, along d; or B's turn less A's, about d.
