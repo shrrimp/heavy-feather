@@ -8,7 +8,7 @@
 cmake_minimum_required(VERSION 3.25)
 project(HeavyFeatherConsumer LANGUAGES CXX)
 
-find_package(HeavyFeather 0.1 REQUIRED)
+find_package(HeavyFeather 0.3 REQUIRED)
 
 add_executable(hf-consumer main.cpp)
 target_link_libraries(hf-consumer PRIVATE HeavyFeather::HeavyFeather)

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 # The version this tree is heading to.
 project(HeavyFeather
-  VERSION 0.1.0
+  VERSION 0.3.0
   DESCRIPTION "Rigid-body dynamics for heavy machinery and complex mechanisms"
   HOMEPAGE_URL "https://github.com/shrrimp/heavy-feather"
   LANGUAGES CXX)

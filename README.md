@@ -26,16 +26,20 @@ It doesn't depend on any engine and for now the plan is for it to do no collisio
 
 ## Where it's at
 
-v0.1: machines built from bodies and joints and solved as articulations, motors, pistons and servos worked like an operator's levers, contacts with friction and rolling resistance, and the basic `hf::World` API. Steps are deterministic and allocate nothing once warm.
+v0.3: machines built from bodies and joints and solved as articulations, with motors, pistons and servos that work like an operator's levers, all behind the `hf::World` API.
 
-It started as a prototype loosely implemented in Heavy Metal, which worked well enough that I decided to turn it into a standalone library. v0.1 is that prototype's machine solver, ported and cleaned up.
+Contacts come with friction and rolling resistance, and can be reported before they touch, so fast bodies stop on thin walls instead of passing through. A contact marked as part of a mechanism, a cam on its follower or a gear on its gear, is solved exactly with its machine. Bodies that stay still fall asleep and cost nothing until something wakes them.
+
+Steps are deterministic and allocate nothing once warm.
+
+It started as a prototype loosely implemented in Heavy Metal, which worked well enough that I decided to turn it into a standalone library. v0.1 was that prototype's machine solver, ported and cleaned up, and the versions since have built on it.
 
 ## Roadmap
 (vague prediction)
 
-- **v0.1:** Machines, motors, contacts, friction, and a simple API
-- **v0.2:** Enhanced contacts for mechanisms: cams, gears and other contact-driven parts
-- **v0.3:** CCD, sub-steps, simulation islands and sleeping
+- **v0.1:** Machines, motors, contacts, friction, and a simple API (done)
+- **v0.2:** Enhanced contacts for mechanisms: cams, gears and other contact-driven parts (done)
+- **v0.3:** CCD, sub-steps, simulation islands and sleeping (done)
 - **v0.4:** Break stuff: breakable joints, and load analysis for rigid-body rupture
 - **v0.5:** Performance and multi-threading
 - **v1.0:** Clean API, docs, and a basic host for testing and demos

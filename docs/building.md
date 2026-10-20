@@ -22,7 +22,7 @@ Feather is the top-level project, so a game that pulls it in just gets the libra
 ## Using it
 
 ```cmake
-find_package(HeavyFeather 0.1 REQUIRED)   # or FetchContent / add_subdirectory
+find_package(HeavyFeather 0.3 REQUIRED)   # or FetchContent / add_subdirectory
 target_link_libraries(game PRIVATE HeavyFeather::HeavyFeather)
 ```
 
@@ -30,7 +30,7 @@ target_link_libraries(game PRIVATE HeavyFeather::HeavyFeather)
 #include <hf/hf.hpp>
 ```
 
-Until 1.0, asking for 0.1 gets you any 0.1.x and nothing else.
+Until 1.0, asking for 0.3 gets you any 0.3.x and nothing else.
 
 To install, run `cmake --install build/release --prefix <dir>`. `tests/package/` is a tiny host
 that builds against an install, and CI runs it.
