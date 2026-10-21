@@ -28,6 +28,8 @@ namespace hf {
     struct Frame {
         Vec3 position{};
         Quat rotation{};
+
+        bool operator==(const Frame &) const = default;
     };
 
 } // namespace hf

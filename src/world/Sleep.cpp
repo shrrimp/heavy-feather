@@ -111,6 +111,14 @@ namespace hf {
 
     void World::Impl::beginSleep() {
         ++stepCount;
+        if (reshapedAny) {
+            for (const ContactData &c : contacts) {
+                BodySlot *a = body(c.in.a), *b = body(c.in.b);
+                if (a && b && (a->reshaped || b->reshaped)) a->wakeNext = b->wakeNext = true;
+            }
+            for (BodySlot &b : bodies) b.reshaped = false;
+            reshapedAny = false;
+        }
         const std::size_t G = groups.size();
         seeded.assign(G, 0);
         for (BodySlot &b : bodies) {

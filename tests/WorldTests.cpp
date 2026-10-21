@@ -637,6 +637,36 @@ TEST_CASE("handles of removed bodies stay invalid") {
     CHECK_MESSAGE((a.index == b.index && a.generation != b.generation), "in the same slot, a new generation");
 }
 
+TEST_CASE("a hinge turned into a weld in place holds its body where it is") {
+    World w;
+    const BodyId bar = rodBetween(w, Vec3{0, 2, 0}, Vec3{1, 2, 0}, 10.0);
+    const JointId hinge = w.addJoint(jointAt(w, JointType::Hinge, BodyId{}, bar, Vec3{0, 2, 0}, Vec3{0, 0, 1}));
+    run(w, 0.3);
+    REQUIRE(w.angularVelocity(bar).z < -1.0);
+    JointDesc d = w.jointDesc(hinge);
+    d.type = JointType::Fixed;
+    REQUIRE(w.setJoint(hinge, d));
+    w.step(kDt);
+    const Vec3 at = w.position(bar);
+    run(w, 1.0);
+    CHECK_MESSAGE(length(w.position(bar) - at) < 1e-9, "welded to the world, it stops swinging");
+    CHECK_MESSAGE(w.jointInfo(hinge).machine == -1, "and its machine is gone");
+}
+
+TEST_CASE("an edit to a joint that's gone, or onto a body that's gone, is refused") {
+    World w;
+    const BodyId a = addBox(w, Vec3{}, 1.0, Vec3{0.5, 0.5, 0.5});
+    const BodyId b = addBox(w, Vec3{2, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
+    const JointId j = w.addJoint(jointAt(w, JointType::Hinge, a, b, Vec3{1, 0, 0}, Vec3{0, 0, 1}));
+    JointDesc d = w.jointDesc(j);
+    w.removeBody(b);
+    CHECK_MESSAGE(!w.setJoint(j, d), "its body went, and the joint with it");
+    const BodyId c = addBox(w, Vec3{2, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
+    const JointId k = w.addJoint(jointAt(w, JointType::Hinge, a, c, Vec3{1, 0, 0}, Vec3{0, 0, 1}));
+    CHECK_MESSAGE(!w.setJoint(k, d), "a desc naming a removed body doesn't attach");
+    CHECK_MESSAGE(w.jointDesc(k).b == c, "and leaves the joint as it was");
+}
+
 TEST_CASE("a cylinder in a loop lifts a heavy boom to a jumped target at its speed") {
     World w;
     const Vec3 pivot{0.5, 1.6, 0}, tip{3.5, 3.6, 0}, base{1.0, 1.3, 0}, z{0, 0, 1};

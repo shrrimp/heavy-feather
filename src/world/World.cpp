@@ -20,6 +20,33 @@ namespace hf {
             wakeUp(I.body(d.b));
         }
 
+        bool attachable(const World::Impl &I, const JointDesc &d) {
+            const bool aOk = d.a.valid() ? I.body(d.a) != nullptr : d.b.valid();
+            const bool bOk = d.b.valid() ? I.body(d.b) != nullptr : d.a.valid();
+            return aOk && bOk && !(d.a == d.b);
+        }
+
+        bool sameShape(const JointDesc &x, const JointDesc &y) {
+            return x.type == y.type && x.a == y.a && x.b == y.b && x.frameA == y.frameA && x.frameB == y.frameB;
+        }
+
+        // A drive as a new joint has it. A piston's or servo's setpoint starts where it is, and travels to its target
+        // at the drive's speed. One born a hair off starts on its target: twin cylinders authored a fraction of a
+        // millimetre apart would otherwise ask the solve for two speeds on one freedom.
+        void startDrive(World::Impl &I, JointSlot &j) {
+            JointSlot fresh;
+            fresh.desc = j.desc;
+            fresh.generation = j.generation;
+            fresh.alive = true;
+            fresh.targetFrom = fresh.targetTo = fresh.targetEff = j.desc.target;
+            j = fresh;
+            if (positionDrive(j.desc.type)) {
+                j.position = j.positionPrev = I.jointPosition(j);
+                const bool there = std::fabs(j.position - j.desc.target) <= kServoDeadband;
+                j.targetFrom = j.targetTo = j.targetEff = there ? j.desc.target : j.position;
+            }
+        }
+
     } // namespace
 
     World::World(const WorldSettings &settings) : impl_(std::make_unique<Impl>()) {
@@ -98,6 +125,15 @@ namespace hf {
     }
 
     void World::wake(BodyId id) { wakeUp(impl_->body(id)); }
+
+    void World::reshaped(BodyId id) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return;
+        wakeUp(b);
+        impl_->wakePartners(id);
+        b->reshaped = true;
+        impl_->reshapedAny = true;
+    }
 
     Vec3 World::position(BodyId id) const {
         const BodySlot *b = impl_->body(id);
@@ -201,9 +237,7 @@ namespace hf {
 
     JointId World::addJoint(const JointDesc &desc) {
         Impl &I = *impl_;
-        const bool aOk = desc.a.valid() ? I.body(desc.a) != nullptr : desc.b.valid();
-        const bool bOk = desc.b.valid() ? I.body(desc.b) != nullptr : desc.a.valid();
-        if (!aOk || !bOk || desc.a == desc.b) return {};
+        if (!attachable(I, desc)) return {};
         std::uint32_t index;
         if (!I.freeJoints.empty()) {
             index = I.freeJoints.back();
@@ -213,23 +247,11 @@ namespace hf {
             I.joints.emplace_back();
         }
         JointSlot &j = I.joints[index];
-        const std::uint32_t generation = j.generation;
-        j = JointSlot{};
-        j.generation = generation;
         j.desc = desc;
-        j.alive = true;
-        j.targetFrom = j.targetTo = j.targetEff = desc.target;
+        startDrive(I, j);
         I.dirty = true;
         wakeEnds(I, desc);
-        // A piston's or servo's setpoint starts where it is, and travels to its target at the drive's speed. One
-        // born a hair off starts on its target: twin cylinders authored a fraction of a millimetre apart would
-        // otherwise ask the solve for two speeds on one freedom.
-        if (positionDrive(desc.type)) {
-            j.position = j.positionPrev = I.jointPosition(j);
-            const bool there = std::fabs(j.position - desc.target) <= kServoDeadband;
-            j.targetFrom = j.targetTo = j.targetEff = there ? desc.target : j.position;
-        }
-        return {index, generation};
+        return {index, j.generation};
     }
 
     void World::removeJoint(JointId id) {
@@ -244,6 +266,34 @@ namespace hf {
     }
 
     bool World::contains(JointId id) const { return impl_->joint(id) != nullptr; }
+
+    bool World::setJoint(JointId id, const JointDesc &desc) {
+        Impl &I = *impl_;
+        JointSlot *j = I.joint(id);
+        if (!j || !attachable(I, desc)) return false;
+        wakeEnds(I, j->desc);
+        wakeEnds(I, desc);
+        const bool reshape = !sameShape(j->desc, desc);
+        const double target = j->desc.target;
+        j->desc = desc;
+        if (reshape) {
+            startDrive(I, *j);
+            I.dirty = true;
+            return true;
+        }
+        if (positionDrive(desc.type)) {
+            const auto inside = [&](double &x) { x = std::clamp(x, desc.min, desc.max); };
+            for (double *x : {&j->desc.target, &j->targetFrom, &j->targetTo, &j->targetEff, &j->holdPos}) inside(*x);
+        }
+        if (desc.type == JointType::Motor && j->lever != 0.0) j->desc.target = j->lever * desc.speed;
+        if (j->desc.target != target) j->commanded = true;
+        return true;
+    }
+
+    JointDesc World::jointDesc(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        return j ? j->desc : JointDesc{};
+    }
 
     void World::setTarget(JointId id, double target) {
         JointSlot *j = impl_->joint(id);

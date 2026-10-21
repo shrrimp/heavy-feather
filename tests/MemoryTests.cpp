@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Builders.hpp"
 #include "host/Allocations.hpp"
 #include "host/Scenes.hpp"
 
@@ -74,4 +75,30 @@ TEST_CASE("a world gives back everything it took") {
         for (int i = 0; i < 15 * kSteps; ++i) s.step(i, kDt);
     }
     CHECK_MESSAGE(allocations().live == before, "destroying a world frees all of it");
+}
+
+TEST_CASE("a drive edited in place doesn't rebuild its machine") {
+    hf::World w;
+    const hf::Vec3 z{0, 0, 1};
+    const hf::BodyId a = build::rodBetween(w, hf::Vec3{0, 2, 0}, hf::Vec3{1, 2, 0}, 10.0);
+    const hf::BodyId b = build::rodBetween(w, hf::Vec3{1, 2, 0}, hf::Vec3{2, 2, 0}, 10.0);
+    w.addJoint(build::jointAt(w, hf::JointType::Hinge, hf::BodyId{}, a, hf::Vec3{0, 2, 0}, z));
+    hf::JointDesc d = build::jointAt(w, hf::JointType::Servo, a, b, hf::Vec3{1, 2, 0}, z);
+    d.maxForce = 1e4;
+    const hf::JointId servo = w.addJoint(d);
+    for (int i = 0; i < 120; ++i) w.step(kDt);
+
+    const auto editAndStep = [&](const hf::JointDesc &edit) {
+        const std::size_t before = allocations().count;
+        w.setJoint(servo, edit);
+        w.step(kDt);
+        return allocations().count - before;
+    };
+    d = w.jointDesc(servo);
+    d.speed = 2.0;
+    d.maxForce = 2e4;
+    d.min = -0.5;
+    CHECK_MESSAGE(editAndStep(d) == 0, "its speed, force and course change in the warm machine");
+    d.frameA.position.x += 1e-3;
+    CHECK_MESSAGE(editAndStep(d) > 0, "a frame moved is a new machine");
 }

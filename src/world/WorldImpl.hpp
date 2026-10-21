@@ -208,6 +208,7 @@ namespace hf {
         WorldStats stats;
 
         std::uint64_t stepCount = 0;
+        bool reshapedAny = false;
         std::vector<SleepLink> sleepLinks;
         std::vector<Touch> touches, touchScratch;
         std::vector<int> linkStart, linkOf, floodDepth, floodQueue, unitOf, unitSteps, islandOf;

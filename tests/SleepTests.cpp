@@ -131,3 +131,36 @@ TEST_CASE("bodies apart are islands apart: a joint makes one, the ground doesn't
     run(h, 3.0);
     CHECK_MESSAGE(h.world.stats().islands == 0, "asleep, none");
 }
+
+TEST_CASE("a sleeper whose support is dug away wakes when the host says so, and falls") {
+    for (const bool told : {false, true}) {
+        host::Host h;
+        const BodyId pedestal = box(h, Vec3{0, 0.5, 0}, 0.5, 0.0);
+        const std::size_t dug = h.shapes.size() - 1;
+        const BodyId b = box(h, Vec3{0, 1.25, 0});
+        run(h, 2.0);
+        REQUIRE(h.world.asleep(b));
+
+        h.shapes[dug].half.y = 0.25;
+        h.shapes[dug].offset.y = -0.25;
+        if (told) h.world.reshaped(pedestal);
+        run(h, 1.0);
+        if (told) CHECK_MESSAGE(std::fabs(h.world.position(b).y - 0.75) < 0.01, "it wakes and falls onto what's left");
+        else CHECK_MESSAGE(h.world.asleep(b), "untold, an edit to a static body is invisible: nothing on it is awake");
+    }
+}
+
+TEST_CASE("material built into a sleeper pushes it out once the host says so") {
+    host::Host h;
+    const BodyId wall = box(h, Vec3{-1.0, 0.5, 0}, 0.5, 0.0);
+    const std::size_t grown = h.shapes.size() - 1;
+    const BodyId b = box(h, Vec3{0, 0.25, 0});
+    run(h, 2.0);
+    REQUIRE(h.world.asleep(b));
+
+    h.shapes[grown].half.x = 0.6;
+    h.shapes[grown].offset.x = 0.2;
+    h.world.reshaped(wall);
+    run(h, 1.0);
+    CHECK_MESSAGE(h.world.position(b).x > 0.04, "the new contact wakes it, and it's pushed clear");
+}

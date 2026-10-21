@@ -56,6 +56,8 @@ namespace hf {
         // wakes it. Its contacts still matter: they tell the world what it rests on, at no cost to the solve.
         bool asleep(BodyId body) const;
         void wake(BodyId body);
+        // The body's shape changed: what rested on it, and what touches it in the next step's contacts, wakes.
+        void reshaped(BodyId body);
 
         // A force at a world point, or a torque, for the next step only.
         void applyForce(BodyId body, const Vec3 &force, const Vec3 &point);
@@ -64,6 +66,10 @@ namespace hf {
         JointId addJoint(const JointDesc &desc);
         void removeJoint(JointId joint);
         bool contains(JointId joint) const;
+        // Changes a joint in place. Drives, courses and springs apply from the next step; a new type, body or frame
+        // rebuilds its machine and restarts its drive. False if the joint is gone or the new bodies are invalid.
+        bool setJoint(JointId joint, const JointDesc &desc);
+        JointDesc jointDesc(JointId joint) const;
 
         // A motor's angular velocity, a piston's position, or a servo's angle.
         void setTarget(JointId joint, double target);

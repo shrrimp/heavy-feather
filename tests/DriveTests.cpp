@@ -167,3 +167,32 @@ TEST_CASE("a held cylinder that gives while another one works comes back") {
     run(4.0);
     CHECK_MESSAGE(std::fabs(h.world.jointPosition(e.boom) - held) < 1e-4, "the boom is back where it was held");
 }
+
+TEST_CASE("a servo edited in place carries on at its new speed") {
+    World w;
+    const JointId servo = armOnServo(w, 5e3);
+    w.setTarget(servo, 1.0);
+    run(w, 0.5);
+    JointDesc d = w.jointDesc(servo);
+    d.speed = 0.25;
+    REQUIRE(w.setJoint(servo, d));
+    const double from = w.jointPosition(servo);
+    run(w, 1.0);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - from - 0.25) < 0.03, "a quarter radian a second from the edit");
+    CHECK_MESSAGE(w.target(servo) == 1.0, "still on its way to the same target");
+}
+
+TEST_CASE("a course narrowed in place brings its servo back inside") {
+    World w;
+    const JointId servo = armOnServo(w, 5e3);
+    w.setTarget(servo, 1.0);
+    run(w, 3.0);
+    JointDesc d = w.jointDesc(servo);
+    d.max = 0.6;
+    REQUIRE(w.setJoint(servo, d));
+    CHECK_MESSAGE(w.target(servo) == 0.6, "the target is clamped to the new course");
+    run(w, 0.5);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - 0.6) < 1e-3, "the new stop puts the arm on it");
+    run(w, 2.0);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - 0.6) < 1e-3, "and the drive holds it there");
+}

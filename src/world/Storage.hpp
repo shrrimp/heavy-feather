@@ -25,6 +25,7 @@ namespace hf {
         // Asleep, it isn't stepped until something wakes it. Carried across steps, and across machine rebuilds.
         bool asleep = false, wakeNext = false;
         int stillSteps = 0;
+        bool reshaped = false; // until the next step: whatever its contacts then touch wakes
     };
 
     struct JointSlot {
