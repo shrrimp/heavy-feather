@@ -33,7 +33,7 @@ namespace hf {
 
         double min = -1.0, max = 1.0; // Slider, Piston and Servo: the course, in m or rad
 
-        double hertz = 0.0, damping = 1.0; // Spring and AngularSpring
+        double hertz = 0.0, damping = 1.0; // Spring and AngularSpring; 0 Hz is a rod, as stiff as a contact
         double restLength = 0.0;           // Spring
     };
 

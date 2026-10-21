@@ -13,6 +13,9 @@ namespace hf {
     struct WorldSettings {
         Vec3 gravity{0.0, -9.81, 0.0};
         int substeps = 16;
+        // Contact sweeps per sub-step, at least. More converge heavy wheeled machines, whose contacts and joints
+        // otherwise settle into a slow jitter, at a cost in large piles.
+        int contactIterations = 8;
         double maxCorrection = 0.05; // m: the furthest a position correction may move a body in one sub-step
         bool sleeping = true;        // still bodies stop being stepped until something wakes them
     };

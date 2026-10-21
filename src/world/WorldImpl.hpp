@@ -223,6 +223,8 @@ namespace hf {
 
         // Groups.cpp
         void rebuildGroups();
+        template <typename Find>
+        void placeWelds(Find &find);
         void bodyState(const BodySlot &b, Vec3 &c, Quat &q, Vec3 &v, Vec3 &w) const;
 
         // Machines.cpp

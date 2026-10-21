@@ -15,7 +15,6 @@ namespace hf {
 
         constexpr int kRestitutionIterations = 4;
         constexpr int kSolverIterations = 16; // per step, split across the sub-steps
-        constexpr int kMinSolverIterations = 8;
         constexpr int kProximalOuter = 4;
         constexpr int kRelaxIterations = 2;
         constexpr int kPositionIterations = 16;
@@ -405,7 +404,8 @@ namespace hf {
     // The biased sweeps. The proximal anchor is re-taken each outer pass, so the impulse bleed cancels at the fixed
     // point. A machine's capped drives and limits are swept in the same loop as the contacts that load them.
     void World::Impl::solveContacts() {
-        const int iterations = std::max(kMinSolverIterations, kSolverIterations / std::max(1, settings.substeps));
+        const int iterations =
+            std::max(std::max(1, settings.contactIterations), kSolverIterations / std::max(1, settings.substeps));
         const int outer = std::min(kProximalOuter, iterations);
         const int inner = std::max(1, iterations / outer);
         for (int o = 0; o < outer; ++o) {

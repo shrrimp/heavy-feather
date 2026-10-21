@@ -31,6 +31,47 @@ namespace hf {
         v = g.v + cross(g.w, c - g.c);
     }
 
+    // A weld holds its frames together: each member is placed from the one it is welded to, out from what can't
+    // move (the world, a static body) or else from the group's first member.
+    template <typename Find>
+    void World::Impl::placeWelds(Find &find) {
+        const std::size_t n = bodies.size();
+        std::vector<std::uint8_t> placed(n, 0), rooted(n, 0);
+        const auto place = [&](BodySlot &b, const Frame &onB, const Vec3 &at, const Quat &q) {
+            b.desc.orientation = normalize(q * conjugate(onB.rotation));
+            b.desc.position = at - b.desc.orientation * onB.position;
+        };
+        for (const JointSlot &j : joints) {
+            if (!j.alive || j.desc.type != JointType::Fixed || (j.desc.a.valid() && j.desc.b.valid())) continue;
+            const bool aBody = j.desc.a.valid();
+            const std::uint32_t i = (aBody ? j.desc.a : j.desc.b).index;
+            const Frame &world = aBody ? j.desc.frameB : j.desc.frameA;
+            if (!bodies[i].desc.isStatic)
+                place(bodies[i], aBody ? j.desc.frameA : j.desc.frameB, world.position, world.rotation);
+            placed[i] = rooted[find(i)] = 1;
+        }
+        for (std::size_t i = 0; i < n; ++i)
+            if (bodies[i].alive && bodies[i].desc.isStatic) placed[i] = rooted[find(i)] = 1;
+        for (std::size_t i = 0; i < n; ++i)
+            if (bodies[i].alive && !rooted[find(i)]) placed[i] = rooted[find(i)] = 1;
+
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const JointSlot &j : joints) {
+                if (!j.alive || j.desc.type != JointType::Fixed || !j.desc.a.valid() || !j.desc.b.valid()) continue;
+                const std::uint32_t a = j.desc.a.index, b = j.desc.b.index;
+                if (placed[a] == placed[b]) continue;
+                const bool fromA = placed[a] != 0;
+                const BodySlot &from = bodies[fromA ? a : b];
+                const Frame &f = fromA ? j.desc.frameA : j.desc.frameB;
+                place(bodies[fromA ? b : a], fromA ? j.desc.frameB : j.desc.frameA,
+                      from.desc.position + from.desc.orientation * f.position, from.desc.orientation * f.rotation);
+                placed[fromA ? b : a] = 1;
+                changed = true;
+            }
+        }
+    }
+
     void World::Impl::rebuildGroups() {
         for (BodySlot &b : bodies)
             if (b.alive && b.group >= 0)
@@ -56,6 +97,7 @@ namespace hf {
         }
         for (std::size_t i = 0; i < n; ++i)
             if (toWorld[i]) toWorld[find(i)] = 1;
+        placeWelds(find);
 
         groups.assign(1, Group{});
         std::vector<int> groupOfRoot(n, -1);

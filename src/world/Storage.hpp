@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <numbers>
 
+#include "contact/ContactParams.hpp"
 #include "hf/Body.hpp"
 #include "hf/Joint.hpp"
 #include "hf/math/Mat3.hpp"
@@ -91,8 +92,12 @@ namespace hf {
     };
 
     // A spring of frequency hertz and damping ratio zeta on a row of effective inverse mass k, as an implicit soft
-    // row: J v + compliance λ = target, with C the row's position error.
+    // row: J v + compliance λ = target, with C the row's position error. At 0 Hz it is a rod: as stiff as a contact.
     inline void springRow(double k, double hertz, double zeta, double C, double h, double &compliance, double &target) {
+        if (!(hertz > 0.0)) {
+            hertz = kContactHertz;
+            zeta = kContactDamping;
+        }
         const double mEff = k > 1e-12 ? 1.0 / k : 0.0;
         const double w = 2.0 * std::numbers::pi * hertz;
         const double ks = mEff * w * w;

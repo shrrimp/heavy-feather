@@ -188,6 +188,23 @@ TEST_CASE("a piston drives a body to its target") {
     CHECK_MESSAGE(std::fabs(w.position(rod).y) < 1e-6, "and holds the rod on its axis against gravity");
 }
 
+TEST_CASE("a contact iteration count of zero or less still sweeps once") {
+    for (const int count : {0, -5}) {
+        WorldSettings settings;
+        settings.contactIterations = count;
+        World w(settings);
+        const BodyId ground = addGround(w);
+        const Vec3 half{0.5, 0.5, 0.5};
+        const BodyId box = addBox(w, Vec3{0, 0.5, 0}, 10.0, half);
+        for (int i = 0; i < 60; ++i) {
+            w.clearContacts();
+            boxOnGround(w, ground, box, half);
+            w.step(kDt);
+        }
+        CHECK_MESSAGE(std::fabs(w.position(box).y - 0.5) < 0.01, "the box still rests on the ground");
+    }
+}
+
 TEST_CASE("a box comes to rest on the ground") {
     World w;
     const BodyId ground = addGround(w);
@@ -594,11 +611,7 @@ TEST_CASE("welded bodies move as one") {
     World w;
     const BodyId a = addBox(w, Vec3{0, 0, 0}, 2.0, Vec3{0.5, 0.5, 0.5});
     const BodyId b = addBox(w, Vec3{1, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
-    JointDesc j;
-    j.type = JointType::Fixed;
-    j.a = a;
-    j.b = b;
-    const JointId weld = w.addJoint(j);
+    const JointId weld = w.addJoint(jointAt(w, JointType::Fixed, a, b, Vec3{0.5, 0, 0}, Vec3{1, 0, 0}));
     for (int s = 0; s < 60; ++s) {
         w.applyTorque(a, Vec3{1, 2, 3});
         w.step(kDt);
@@ -607,6 +620,37 @@ TEST_CASE("welded bodies move as one") {
     CHECK_MESSAGE(length(rel - Vec3{1, 0, 0}) < 1e-12, "b keeps its place on a");
     CHECK_MESSAGE(length(w.angularVelocity(a) - w.angularVelocity(b)) < 1e-12, "and its spin");
     CHECK_MESSAGE(w.jointInfo(weld).machine == -1, "a weld isn't a machine joint");
+}
+
+TEST_CASE("a weld holds its frames: re-authored, it turns its body into the new pose") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const BodyId a = addBox(w, Vec3{0, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
+    const BodyId b = addBox(w, Vec3{1, 0, 0}, 1.0, Vec3{0.5, 0.5, 0.5});
+    JointDesc d = jointAt(w, JointType::Fixed, a, b, Vec3{0.5, 0, 0}, Vec3{1, 0, 0});
+    const JointId weld = w.addJoint(d);
+    w.step(kDt);
+    CHECK_MESSAGE(length(w.position(b) - Vec3{1, 0, 0}) < 1e-12, "frames that meet leave the bodies where they are");
+
+    d.frameB.rotation = d.frameB.rotation * Quat{std::cos(kPi / 4), std::sin(kPi / 4), 0, 0};
+    REQUIRE(w.setJoint(weld, d));
+    w.step(kDt);
+    const Vec3 up = w.orientation(b) * Vec3{0, 1, 0};
+    CHECK_MESSAGE(length(up - Vec3{0, 0, -1}) < 1e-9, "a quarter turn about the weld's axis turns b with it");
+    CHECK_MESSAGE(length(w.position(b) - Vec3{1, 0, 0}) < 1e-9, "about the point the frames meet");
+}
+
+TEST_CASE("a spring of 0 Hz is a rod at its rest length") {
+    World w;
+    const BodyId bob = addBox(w, Vec3{0, -1.0, 0}, 5.0, Vec3{0.1, 0.1, 0.1});
+    JointDesc d;
+    d.type = JointType::Spring;
+    d.b = bob;
+    d.restLength = 1.5;
+    w.addJoint(d);
+    run(w, 3.0);
+    CHECK_MESSAGE(std::fabs(length(w.position(bob)) - 1.5) < 1e-3, "pulled out to its rest length, and held there");
 }
 
 TEST_CASE("a body hangs on a spring from the world") {
