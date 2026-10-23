@@ -73,9 +73,22 @@ namespace hf {
     }
 
     void World::Impl::rebuildGroups() {
-        for (BodySlot &b : bodies)
-            if (b.alive && b.group >= 0)
-                bodyState(b, b.desc.position, b.desc.orientation, b.desc.velocity, b.desc.angularVelocity);
+        ++groupRebuilds;
+        // Where the step left each body, unless the host has written it since.
+        for (BodySlot &b : bodies) {
+            if (!b.alive || b.group < 0) continue;
+            Vec3 c, v, w;
+            Quat q;
+            bodyState(b, c, q, v, w);
+            if (!b.poseWritten) {
+                b.desc.position = c;
+                b.desc.orientation = q;
+            }
+            if (!b.velocityWritten) {
+                b.desc.velocity = v;
+                b.desc.angularVelocity = w;
+            }
+        }
 
         // Welds: union-find over Fixed joints. A body welded to the world is static.
         const std::size_t n = bodies.size();
@@ -123,6 +136,7 @@ namespace hf {
             if (!b.alive) continue;
             Group &g = groups[std::size_t(b.group)];
             if (b.desc.isStatic || !(b.desc.mass > 0.0)) g.isStatic = true;
+            if (b.kinematic) g.kinematic = true;
             if (b.desc.mass > 0.0) {
                 M[std::size_t(b.group)] += b.desc.mass;
                 mc[std::size_t(b.group)] += b.desc.mass * b.desc.position;
@@ -160,6 +174,14 @@ namespace hf {
             g.invInertiaBody = inverse(g.inertiaBody);
             g.v = P[gi] / M[gi];
             g.w = std::fabs(determinant(Iw[gi])) > 1e-300 ? inverse(Iw[gi]) * L[gi] : Vec3{};
+        }
+        // A kinematic group keeps its mass for when it is let go, but is static to the solver until then.
+        for (Group &g : groups) {
+            if (!g.kinematic) continue;
+            g.isStatic = true;
+            g.v = g.w = Vec3{};
+            g.targetC = g.c;
+            g.targetQ = g.q;
         }
 
         for (BodySlot &b : bodies) {

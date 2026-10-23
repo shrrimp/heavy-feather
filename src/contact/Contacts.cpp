@@ -60,10 +60,12 @@ namespace hf {
             c.depth0 = c.in.depth;
             c.n = c.in.normal;
             c.depth = c.in.depth;
-            // A gap starts cold: replaying an impulse across it would pull the pair together.
+            // A gap starts cold: replaying an impulse across it would pull the pair together. So does a pair the host
+            // moved: what pushed it where it was doesn't push it where it is.
             const WarmStart key{{c.in.a, c.in.b, c.in.feature}};
             const auto it = std::lower_bound(warm.begin(), warm.end(), key);
-            const bool found = c.in.depth >= 0.0 && it != warm.end() && it->key == key.key;
+            const bool found =
+                c.in.depth >= 0.0 && !a->teleported && !b->teleported && it != warm.end() && it->key == key.key;
             c.ln = found ? it->ln : 0.0;
             c.lt1 = found ? it->lt1 : 0.0;
             c.lt2 = found ? it->lt2 : 0.0;

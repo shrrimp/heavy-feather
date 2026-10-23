@@ -30,9 +30,20 @@ namespace hf {
         double sign = 1.0; // the joint's own coordinate = sign × the articulation's
     };
 
+    // What a machine is anchored on: a group that doesn't move with it, its root links' (link >= 0, whose pose the
+    // articulation keeps as the anchor's) or, for a floating machine, its closures'. Moved, it carries the machine.
+    struct Anchor {
+        int group = 0;
+        int link = -1;
+        Vec3 c{}; // as last followed, when link < 0
+        Quat q{};
+    };
+
     struct MachineData {
         Machine m;
         std::vector<int> groupOfLink;
+        std::vector<Anchor> anchors;
+        bool anchored = false; // any of its joints holds it to something that doesn't move with it
         std::vector<JointRef> joints;
         std::vector<Force> fext;
         std::vector<RowState> velState, posState;
@@ -227,6 +238,12 @@ namespace hf {
         std::vector<int> bodyOfGroup, islandBodies;
         int rejected = 0; // calls refused since the last step
 
+        // Moves.cpp: what the host wrote since the last step, and what the last step moved.
+        std::vector<std::uint32_t> written;
+        std::vector<BodyId> movedBodies;
+        int groupRebuilds = 0, machineRebuilds = 0; // since the last step
+        std::vector<std::uint8_t> groupMark;
+
         std::uint64_t stepCount = 0;
         bool reshapedAny = false;
         std::vector<SleepLink> sleepLinks;
@@ -289,6 +306,20 @@ namespace hf {
             return g.island >= 0 && std::size_t(g.island) < islandFaulted.size() &&
                    islandFaulted[std::size_t(g.island)];
         }
+
+        // Moves.cpp
+        void build(); // the groups and machines, if anything changed them
+        void noteWritten(BodySlot &b);
+        // Moves the marked groups rigidly, taking the pose (fromC, fromQ) to (toC, toQ): positions turn about fromC,
+        // velocities turn too. Their bodies are moved by the host: their contacts and machine rows start cold.
+        void moveGroups(const std::vector<std::uint8_t> &mark, const Vec3 &fromC, const Quat &fromQ, const Vec3 &toC,
+                        const Quat &toQ);
+        bool followAnchors(MachineData &md); // carried along by an anchor that moved: true if it was
+        void carryAnchoredOn(int group);     // every machine anchored on the group, sleeping or not
+        void markMachine(int machine, std::vector<std::uint8_t> &mark) const;
+        void beginKinematic(double dt); // each kinematic group's velocity, to its target over the step
+        void moveKinematic(Group &g, double t, bool last) const;
+        void endStepBodies(); // what moved, and the host's writes forgotten
 
         // Sleep.cpp
         void beginSleep(); // who is stepped: the awake, and what they reach

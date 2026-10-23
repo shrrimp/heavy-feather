@@ -26,6 +26,8 @@ namespace hf {
         std::uint64_t keyOf(BodyId id) { return (std::uint64_t(id.index) << 32) | id.generation; }
         BodyId idOf(std::uint64_t key) { return {std::uint32_t(key >> 32), std::uint32_t(key)}; }
 
+        bool sweeping(const Group &g) { return g.kinematic && (g.v != Vec3{} || g.w != Vec3{}); }
+
         Touch touchOf(BodyId x, BodyId y, std::uint64_t step) {
             const std::uint64_t a = keyOf(x), b = keyOf(y);
             return {std::min(a, b), std::max(a, b), step};
@@ -93,6 +95,8 @@ namespace hf {
             };
             for (const SleepLink &l : I.sleepLinks) {
                 if (!(l.touching || l.jointed) || !I.reached[std::size_t(l.a)] || !I.reached[std::size_t(l.b)]) continue;
+                // A kinematic body joins no island: nothing it touches can push it.
+                if (I.groups[std::size_t(l.a)].isStatic || I.groups[std::size_t(l.b)].isStatic) continue;
                 const int a = find(l.a), b = find(l.b);
                 if (a != b) root[std::size_t(std::max(a, b))] = std::min(a, b);
             }
@@ -129,6 +133,9 @@ namespace hf {
             }
             if (!b.asleep && !groups[std::size_t(b.group)].isStatic) seeded[std::size_t(b.group)] = 1;
         }
+        // A kinematic body on the move wakes what it reaches, as an awake body does.
+        for (std::size_t g = 0; g < G; ++g)
+            if (sweeping(groups[g])) seeded[g] = 1;
         const auto awake = [&](std::uint64_t key) {
             const BodySlot *b = body(idOf(key));
             return b && seeded[std::size_t(b->group)];
@@ -160,7 +167,8 @@ namespace hf {
         sleepLinks.clear();
         const auto link = [&](const BodySlot *a, const BodySlot *b, SleepLink l) {
             if (!a || !b || a->group == b->group) return;
-            if (groups[std::size_t(a->group)].isStatic || groups[std::size_t(b->group)].isStatic) return;
+            const Group &ga = groups[std::size_t(a->group)], &gb = groups[std::size_t(b->group)];
+            if ((ga.isStatic && !sweeping(ga)) || (gb.isStatic && !sweeping(gb))) return;
             l.a = a->group;
             l.b = b->group;
             sleepLinks.push_back(l);
@@ -248,6 +256,7 @@ namespace hf {
         // The veto travels one link a step. Falling asleep late costs nothing; a step early is a visible freeze.
         for (const SleepLink &l : sleepLinks) {
             if (!l.touching && !l.jointed) continue;
+            if (unitOf[std::size_t(l.a)] < 0 || unitOf[std::size_t(l.b)] < 0) continue;
             const std::size_t a = std::size_t(unitOf[std::size_t(l.a)]), b = std::size_t(unitOf[std::size_t(l.b)]);
             if (a == b) continue;
             if (unitSteps[a] == 0) unitVetoed[b] = 1;

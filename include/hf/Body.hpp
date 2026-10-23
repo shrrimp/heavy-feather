@@ -22,4 +22,12 @@ namespace hf {
         bool isStatic = false;
     };
 
+    // A body's pose and motion, read at once.
+    struct BodyState {
+        Vec3 position{}; // of the centre of mass
+        Quat orientation{};
+        Vec3 velocity{}; // of the centre of mass
+        Vec3 angularVelocity{};
+    };
+
 } // namespace hf

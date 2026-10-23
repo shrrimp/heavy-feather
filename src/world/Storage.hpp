@@ -28,6 +28,15 @@ namespace hf {
         int stillSteps = 0;
         bool reshaped = false; // until the next step: whatever its contacts then touch wakes
         int faultStreak = 0;   // consecutive steps its island has been put back
+
+        // Until the end of the next step: the host wrote its pose or its velocity, which a rebuild keeps rather than
+        // reading the body back from its group; it was moved by the host, so its contacts and rows start cold.
+        bool poseWritten = false, velocityWritten = false, teleported = false;
+        bool listed = false; // in World::Impl::written
+        bool kinematic = false;
+        bool hasTarget = false; // kinematic: where the host wants it once the next step is done
+        Vec3 targetPosition{};
+        Quat targetOrientation{};
     };
 
     struct JointSlot {
@@ -64,6 +73,10 @@ namespace hf {
         Mat3 inertiaBody{}, invInertiaBody{};
         double radius = 0.0;
         bool isStatic = true;
+        // Moved by the host, static to the solver: its velocity is what takes it to its target this step.
+        bool kinematic = false;
+        Vec3 targetC{};
+        Quat targetQ{};
 
         Vec3 force{}, torque{}; // for this step, about c
         Vec3 pv{}, pw{};        // pseudo velocities: the position pass, one sub-step only

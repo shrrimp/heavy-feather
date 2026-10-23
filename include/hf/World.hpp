@@ -36,6 +36,8 @@ namespace hf {
         int islands = 0;             // stepped bodies touching or jointed to each other, apart from the rest
         int faults = 0;              // islands put back this step: see World::faults
         int rejected = 0;            // calls refused for values the world can't use, since the step before this one
+        // Since the step before this one: whole-world rebuilds of the bodies' groups, and machines built.
+        int groupRebuilds = 0, machineRebuilds = 0;
     };
 
     // Bodies, joints and the host's contacts in; poses out. Jointed bodies are grouped into machines, each solved
@@ -64,8 +66,28 @@ namespace hf {
         Quat orientation(BodyId body) const;
         Vec3 velocity(BodyId body) const;
         Vec3 angularVelocity(BodyId body) const;
+        BodyState state(BodyId body) const; // all four at once
+        // The bodies whose pose the last step changed: what a host has to write back.
+        std::span<const BodyId> moved() const;
+
+        // Puts the body there, and its weld group with it; a machine link alone pulls its machine apart, see
+        // moveMachine. A static body carries the machines anchored on it along. A kinematic body moves there over
+        // the next step instead. What a pose or a velocity write sets survives the world rebuilding itself.
         bool setPose(BodyId body, const Vec3 &position, const Quat &orientation);
+        // A kinematic body moves at this velocity over the next step.
         bool setVelocity(BodyId body, const Vec3 &velocity, const Vec3 &angularVelocity);
+        // The body to this pose, and everything it is welded or jointed to with it, by the same rigid move: its
+        // machine's joints and drives are left as they were, its velocities turn with it. False for a machine
+        // anchored on something that didn't move with it the same way.
+        bool moveMachine(BodyId body, const Vec3 &position, const Quat &orientation);
+        // One rigid motion for the body's whole machine, about the body's centre of mass: a throw. False for a
+        // static body, and for a machine anchored on something.
+        bool setMachineVelocity(BodyId body, const Vec3 &velocity, const Vec3 &angularVelocity);
+        // A kinematic body is moved by the host alone: each setPose is where it will be once the next step is done,
+        // and it gets there over the step at the speed that takes. Nothing pushes it, and it pushes and carries what
+        // it touches. Let go, it flies on at that speed. False for a machine link: a machine moves by moveMachine.
+        bool setKinematic(BodyId body, bool kinematic);
+        bool kinematic(BodyId body) const;
         // New mass and inertia (about the centre of mass, body axes), as an edit changes them; the body carries on.
         bool setMassProperties(BodyId body, double mass, const Mat3 &inertia);
         // A static body doesn't move and isn't pushed: one pinned in place.

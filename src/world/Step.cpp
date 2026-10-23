@@ -38,7 +38,7 @@ namespace hf {
         // among them, to every island that touches it.
         void checkStill(const std::vector<Group> &groups) {
             for (const Group &g : groups) {
-                if (moves(g)) continue;
+                if (moves(g) || g.kinematic) continue;
                 assert(g.v == Vec3{} && g.w == Vec3{} && g.pv == Vec3{} && g.pw == Vec3{});
             }
         }
@@ -71,11 +71,17 @@ namespace hf {
         const int n = std::max(1, settings.substeps);
         h = dt / n;
 
-        if (dirty) {
-            rebuildGroups();
-            buildMachines();
-            dirty = false;
+        build();
+        // A machine the host moved starts its rows cold.
+        for (std::uint32_t i : written) {
+            const BodySlot &b = bodies[i];
+            if (!b.alive || !b.teleported || b.group < 0) continue;
+            const int m = groups[std::size_t(b.group)].machine;
+            if (m < 0) continue;
+            machines[std::size_t(m)].lastVel.clear();
+            machines[std::size_t(m)].lastPos.clear();
         }
+        beginKinematic(dt);
         beginSleep();
         const auto stepped = [](const MachineData &md) { return !md.frozen; };
 
@@ -133,8 +139,10 @@ namespace hf {
 
             for (MachineData &md : machines)
                 if (stepped(md)) integrate(md);
-            for (Group &g : groups)
+            for (Group &g : groups) {
                 if (rigid(g)) integrateRigid(g, h);
+                else if (g.kinematic) moveKinematic(g, double(i + 1) * h, i == n - 1);
+            }
             afterPhase(FaultPhase::Integrate, i);
 
             relaxContacts();
@@ -156,11 +164,14 @@ namespace hf {
         storeContacts();
         carriedRows.clear();
         endSleep();
+        endStepBodies();
 
         stats = WorldStats{};
         stats.faults = int(faults.size());
         stats.rejected = rejected;
-        rejected = 0;
+        stats.groupRebuilds = groupRebuilds;
+        stats.machineRebuilds = machineRebuilds;
+        rejected = groupRebuilds = machineRebuilds = 0;
         stats.contacts = int(prep.size());
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {

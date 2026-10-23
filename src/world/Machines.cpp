@@ -217,6 +217,7 @@ namespace hf {
             Articulation &art = md.m.art;
             art.links.clear();
             md.groupOfLink.clear();
+            md.anchors.clear();
             std::vector<int> linkOfNode(std::size_t(K + 1), -1);
             const auto addLink = [&](int nd, int parentLink, const JointRef *via, bool parentIsA) {
                 const Group &g = I.groups[std::size_t(groupsOf[std::size_t(nd)])];
@@ -238,6 +239,7 @@ namespace hf {
                     if (parentLink < 0) {
                         L.anchorPos = I.groups[std::size_t(P.group)].c;
                         L.anchorRot = I.groups[std::size_t(P.group)].q;
+                        md.anchors.push_back({P.group, int(art.links.size())});
                     }
                 }
                 linkOfNode[std::size_t(nd)] = int(art.links.size());
@@ -274,6 +276,20 @@ namespace hf {
             for (JointRef &r : refs) {
                 r.linkA = r.A.isStatic ? -1 : linkOfNode[std::size_t(local.at(r.A.group))];
                 r.linkB = r.B.isStatic ? -1 : linkOfNode[std::size_t(local.at(r.B.group))];
+            }
+
+            // A floating machine closed onto something static is carried by that instead.
+            md.anchored = false;
+            for (const JointRef &r : refs) {
+                if (!kinematic(type(r)) || !(r.A.isStatic || r.B.isStatic)) continue;
+                md.anchored = true;
+                const int group = r.A.isStatic ? r.A.group : r.B.group;
+                bool known = start == W; // rooted on it already
+                for (const Anchor &a : md.anchors) known = known || a.group == group;
+                if (!known) {
+                    const Group &g = I.groups[std::size_t(group)];
+                    md.anchors.push_back({group, -1, g.c, g.q});
+                }
             }
 
             // Two parallel hinges on one pair of links are one axle held at two points. Authored, the second point
@@ -334,7 +350,7 @@ namespace hf {
         std::iota(uf.begin(), uf.end(), std::size_t(0));
         std::vector<std::uint8_t> inMachine(nG, 0);
         for (const JointRef &r : refs) {
-            if (!kinematic(joints[r.joint].desc.type)) continue;
+            if (!hf::kinematic(joints[r.joint].desc.type)) continue;
             if (!r.A.isStatic) inMachine[std::size_t(r.A.group)] = 1;
             if (!r.B.isStatic) inMachine[std::size_t(r.B.group)] = 1;
             if (r.A.isStatic || r.B.isStatic) continue;
@@ -361,7 +377,7 @@ namespace hf {
         for (const JointRef &r : refs) {
             const int ma = machineOf(r.A), mb = machineOf(r.B);
             const int mi = ma >= 0 ? ma : mb;
-            if (kinematic(joints[r.joint].desc.type)) {
+            if (hf::kinematic(joints[r.joint].desc.type)) {
                 refsOf[std::size_t(mi)].push_back(r);
                 continue;
             }
@@ -387,6 +403,7 @@ namespace hf {
             }
             md.fext.assign(md.groupOfLink.size(), Force{});
         }
+        machineRebuilds += int(machines.size());
     }
 
     void World::Impl::writeVelocities(MachineData &md) {
@@ -412,6 +429,7 @@ namespace hf {
     // The articulation from the groups' poses and velocities. A tree joint the poses had drifted off is snapped
     // back, and written back so the first contact refresh sees the pose the solver will.
     void World::Impl::readState(MachineData &md) {
+        followAnchors(md);
         const std::size_t n = md.groupOfLink.size();
         md.c.resize(n);
         md.R.resize(n);

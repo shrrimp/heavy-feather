@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "world/Checks.hpp"
 #include "world/WorldImpl.hpp"
 
 namespace hf {
@@ -24,14 +25,6 @@ namespace hf {
             const bool aOk = d.a.valid() ? I.body(d.a) != nullptr : d.b.valid();
             const bool bOk = d.b.valid() ? I.body(d.b) != nullptr : d.a.valid();
             return aOk && bOk && !(d.a == d.b);
-        }
-
-        bool finite(const Vec3 &v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
-
-        // A rotation the world can normalise: finite, and not of almost no length.
-        bool rotation(const Quat &q) {
-            return std::isfinite(q.w) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) &&
-                   length(q) >= 1e-6;
         }
 
         // Symmetric to rounding, and positive definite: every leading minor above zero.
@@ -145,13 +138,15 @@ namespace hf {
             index = std::uint32_t(I.bodies.size());
             I.bodies.emplace_back();
         }
+        // A slot reused starts as new: nothing of the body that had it is left, but its generation.
         BodySlot &b = I.bodies[index];
+        BodySlot fresh;
+        fresh.generation = b.generation;
+        fresh.listed = b.listed;
+        b = fresh;
         b.desc = desc;
         b.desc.orientation = normalize(desc.orientation);
         b.alive = true;
-        b.group = -1;
-        b.asleep = b.wakeNext = false;
-        b.stillSteps = 0;
         I.dirty = true;
         return {index, b.generation};
     }
@@ -247,21 +242,34 @@ namespace hf {
     }
 
     bool World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
-        BodySlot *b = impl_->body(id);
+        Impl &I = *impl_;
+        BodySlot *b = I.body(id);
         if (!b) return false;
-        if (!finite(position) || !rotation(orientation)) return impl_->reject(false);
+        if (!finite(position) || !rotation(orientation)) return I.reject(false);
         const Quat qb = normalize(orientation);
         // A host writing back the pose it read isn't a push: only a real move wakes it.
-        if (length(position - this->position(id)) > 1e-9 || std::fabs(dot(qb, this->orientation(id))) < 1.0 - 1e-12) {
+        const bool moves =
+            length(position - this->position(id)) > 1e-9 || std::fabs(dot(qb, this->orientation(id))) < 1.0 - 1e-12;
+        if (moves) {
             wakeUp(b);
-            impl_->wakePartners(id);
+            I.wakePartners(id);
+        }
+        I.noteWritten(*b);
+        if (b->kinematic) {
+            b->targetPosition = position;
+            b->targetOrientation = qb;
+            b->hasTarget = true;
+            return true;
         }
         b->desc.position = position;
         b->desc.orientation = qb;
+        b->poseWritten = true;
+        b->teleported = b->teleported || moves;
         if (b->group < 0) return true;
-        Group &g = impl_->groups[std::size_t(b->group)];
+        Group &g = I.groups[std::size_t(b->group)];
         g.q = normalize(qb * conjugate(b->rot));
         g.c = position - g.q * b->offset;
+        if (g.isStatic && moves) I.carryAnchoredOn(b->group);
         return true;
     }
 
@@ -273,6 +281,8 @@ namespace hf {
             wakeUp(b);
         b->desc.velocity = velocity;
         b->desc.angularVelocity = angularVelocity;
+        b->velocityWritten = true;
+        impl_->noteWritten(*b);
         if (b->group < 0) return true;
         Group &g = impl_->groups[std::size_t(b->group)];
         // A sleeper keeps no velocity: a host writing back what it read leaves it still.
