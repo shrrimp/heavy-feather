@@ -105,15 +105,20 @@ namespace hf {
         beginSleep();
         const auto stepped = [](const MachineData &md) { return !md.frozen; };
 
-        for (Group &g : groups) g.force = g.torque = Vec3{};
-        for (BodySlot &b : bodies) {
-            if (!b.alive) continue;
+        // The host's forces, on whatever is stepped: a force on a sleeper woke it.
+        for (int gi : steppedGroups) groups[std::size_t(gi)].force = groups[std::size_t(gi)].torque = Vec3{};
+        std::sort(forced.begin(), forced.end());
+        for (std::uint32_t i : forced) {
+            BodySlot &b = bodies[i];
+            b.forced = false;
+            if (!b.alive || b.group < 0) continue;
             Group &g = groups[std::size_t(b.group)];
             const Vec3 d = g.q * b.offset;
             g.force += b.force;
             g.torque += b.torque + cross(d, b.force);
             b.force = b.torque = Vec3{};
         }
+        forced.clear();
 
         for (MachineData &md : machines)
             if (stepped(md)) readState(md);
@@ -128,10 +133,14 @@ namespace hf {
 #endif
             // At the top of sub-step i a moving target is i/n of the way along.
             const double alpha = double(i) / double(n);
-            for (JointSlot &j : joints)
-                if (j.alive) j.targetEff = j.targetFrom + (j.targetTo - j.targetFrom) * alpha;
+            for (int mi : steppedMachines)
+                for (const JointRef &r : machines[std::size_t(mi)].joints) {
+                    JointSlot &j = joints[r.joint];
+                    j.targetEff = j.targetFrom + (j.targetTo - j.targetFrom) * alpha;
+                }
 
-            for (Group &g : groups) {
+            for (int gi : steppedGroups) {
+                Group &g = groups[std::size_t(gi)];
                 if (!rigid(g)) continue;
                 g.v += h * (g.invMass * g.force + settings.gravity);
                 g.w += h * (g.invInertiaWorld() * g.torque);
@@ -156,14 +165,15 @@ namespace hf {
                 if (stepped(md)) solvePositions(md);
             afterPhase(FaultPhase::Positions, i);
             solveContactPositions();
-            for (Group &g : groups)
-                if (rigid(g)) clampCorrection(g, h, settings.maxCorrection);
+            for (int gi : steppedGroups)
+                if (rigid(groups[std::size_t(gi)])) clampCorrection(groups[std::size_t(gi)], h, settings.maxCorrection);
             afterPhase(FaultPhase::ContactPositions, i);
             laps.lap(profile.positions);
 
             for (MachineData &md : machines)
                 if (stepped(md)) integrate(md);
-            for (Group &g : groups) {
+            for (int gi : steppedGroups) {
+                Group &g = groups[std::size_t(gi)];
                 if (rigid(g)) integrateRigid(g, h);
                 else if (g.kinematic) moveKinematic(g, double(i + 1) * h, i == n - 1);
             }
@@ -177,8 +187,9 @@ namespace hf {
             laps.lap(profile.relax);
         }
 
-        for (JointSlot &j : joints)
-            if (j.alive) j.targetFrom = j.targetTo;
+        for (int mi : steppedMachines)
+            for (const JointRef &r : machines[std::size_t(mi)].joints)
+                joints[r.joint].targetFrom = joints[r.joint].targetTo;
         restitution();
         for (MachineData &md : machines)
             if (stepped(md)) writeVelocities(md);
@@ -190,6 +201,7 @@ namespace hf {
         storeContacts();
         carriedRows.clear();
         endSleep();
+        keepResting();
         endStepBodies();
 
         stats = WorldStats{};

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <numbers>
 #include <tuple>
 #include <vector>
@@ -42,17 +43,56 @@ namespace hf {
     // Once per step: the host's contacts in group frames, their warm start, and the approach speed a bounce
     // reflects, sampled before anything has touched a velocity.
     void World::Impl::beginContacts() {
-        for (Group &g : groups) {
+        for (int gi : steppedGroups) {
+            Group &g = groups[std::size_t(gi)];
             g.c0 = g.c;
             g.q0 = g.q;
         }
-        std::size_t kept = 0;
+        // A contact the world kept that the flood reached joins the solve, warm with its own impulses.
+        std::size_t still = 0;
+        for (std::size_t i = 0; i < kept.size(); ++i) {
+            const ContactData &c = kept[i];
+            if (moves(groups[std::size_t(body(c.in.a)->group)]) || moves(groups[std::size_t(body(c.in.b)->group)])) {
+                contacts.push_back(c);
+                contacts.back().fromKept = true;
+            } else {
+                if (still != i) kept[still] = c;
+                ++still;
+            }
+        }
+        kept.resize(still);
+        newlyKept.clear();
+
+        // A gap starts cold: replaying an impulse across it would pull the pair together. So does a pair the host
+        // moved: what pushed it where it was doesn't push it where it is.
+        const auto warmStart = [&](ContactData &c, const BodySlot &a, const BodySlot &b) {
+            if (c.fromKept) return;
+            const WarmStart key{{c.in.a, c.in.b, c.in.feature}};
+            const auto it = std::lower_bound(warm.begin(), warm.end(), key);
+            const bool usable = c.in.depth >= 0.0 && !a.teleported && !b.teleported;
+            const bool found = usable && it != warm.end() && it->key == key.key;
+            c.ln = found ? it->ln : 0.0;
+            c.lt1 = found ? it->lt1 : 0.0;
+            c.lt2 = found ? it->lt2 : 0.0;
+            c.lr1 = found ? it->lr1 : 0.0;
+            c.lr2 = found ? it->lr2 : 0.0;
+            c.ls = found ? it->ls : 0.0;
+        };
+
+        std::size_t active = 0;
         for (std::size_t i = 0; i < contacts.size(); ++i) {
             ContactData &c = contacts[i];
             const BodySlot *a = body(c.in.a), *b = body(c.in.b);
-            if (!a || !b || a->group == b->group) continue;
+            if (c.absorbed || !a || !b || a->group == b->group) continue;
             const Group &ga = groups[std::size_t(a->group)], &gb = groups[std::size_t(b->group)];
-            if (!moves(ga) && !moves(gb)) continue;
+            if (!moves(ga) && !moves(gb)) {
+                // Resting between sleepers, or a sleeper and the ground: the world keeps it, and what held it.
+                if (!(ga.isStatic && gb.isStatic)) {
+                    warmStart(c, *a, *b);
+                    newlyKept.push_back(c);
+                }
+                continue;
+            }
             c.ga = a->group;
             c.gb = b->group;
             c.rA = c.in.point - ga.c;
@@ -60,26 +100,16 @@ namespace hf {
             c.depth0 = c.in.depth;
             c.n = c.in.normal;
             c.depth = c.in.depth;
-            // A gap starts cold: replaying an impulse across it would pull the pair together. So does a pair the host
-            // moved: what pushed it where it was doesn't push it where it is.
-            const WarmStart key{{c.in.a, c.in.b, c.in.feature}};
-            const auto it = std::lower_bound(warm.begin(), warm.end(), key);
-            const bool found =
-                c.in.depth >= 0.0 && !a->teleported && !b->teleported && it != warm.end() && it->key == key.key;
-            c.ln = found ? it->ln : 0.0;
-            c.lt1 = found ? it->lt1 : 0.0;
-            c.lt2 = found ? it->lt2 : 0.0;
-            c.lr1 = found ? it->lr1 : 0.0;
-            c.lr2 = found ? it->lr2 : 0.0;
-            c.ls = found ? it->ls : 0.0;
+            warmStart(c, *a, *b);
             c.lnMax = 0.0;
             const Vec3 va = ga.v + cross(ga.w, c.rA), vb = gb.v + cross(gb.w, c.rB);
             c.vnImpact = dot(vb - va, c.n);
             c.machine = directMachine(c.in, ga, gb);
             c.row = -1;
-            contacts[kept++] = c;
+            c.impact = 0;
+            contacts[active++] = c;
         }
-        contacts.resize(kept);
+        contacts.resize(active);
 
         // Support travels one contact per iteration, so contacts are solved from the ground up: by how many contacts
         // separate them from something static. A counting sort, so equal depths keep the host's order.
@@ -146,6 +176,41 @@ namespace hf {
         beginRigidRows();
     }
 
+    // Once the step is done: a contact whose ends are all asleep or static now stays in the world, with its impulses,
+    // until one of them wakes or the host hands the pair again. The host need only hand pairs with an awake end.
+    void World::Impl::keepResting() {
+        const auto resting = [&](const BodySlot &s) {
+            const Group &g = groups[std::size_t(s.group)];
+            return s.asleep || (g.isStatic && !g.kinematic);
+        };
+        for (const ContactData &c : contacts) {
+            const BodySlot *a = body(c.in.a), *b = body(c.in.b);
+            if (!a || !b || !resting(*a) || !resting(*b)) continue;
+            if (groups[std::size_t(a->group)].isStatic && groups[std::size_t(b->group)].isStatic) continue;
+            newlyKept.push_back(c);
+        }
+        if (newlyKept.empty()) return;
+        const auto keyOf = [](const ContactData &c) { return ContactKey{c.in.a, c.in.b, c.in.feature}; };
+        const auto before = [&](const ContactData &x, const ContactData &y) { return keyOf(x) < keyOf(y); };
+        std::sort(newlyKept.begin(), newlyKept.end(), before);
+        keptScratch.clear();
+        std::merge(kept.begin(), kept.end(), newlyKept.begin(), newlyKept.end(), std::back_inserter(keptScratch),
+                   before);
+        // A key twice: the later answer stands.
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < keptScratch.size(); ++i) {
+            if (k > 0 && keyOf(keptScratch[k - 1]) == keyOf(keptScratch[i])) {
+                keptScratch[k - 1] = keptScratch[i];
+                continue;
+            }
+            if (k != i) keptScratch[k] = keptScratch[i];
+            ++k;
+        }
+        keptScratch.resize(k);
+        kept.swap(keptScratch);
+        newlyKept.clear();
+    }
+
     // The warm start for the next step. Only this step's contacts are kept, so the cache can't grow.
     void World::Impl::storeContacts() {
         warm.clear();
@@ -182,15 +247,20 @@ namespace hf {
 
     // The poses have moved since the host detected: the depth is re-derived, not re-detected. Each end moves with its
     // body, turning to first order, and the normal holds, so a rolling contact stays on the ground.
+    // An end that isn't stepped hasn't moved since the host looked.
     double World::Impl::contactDepth(const ContactData &c) const {
         const Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
-        const Vec3 da = a.c - a.c0 + cross(a.turned, c.rA);
-        const Vec3 db = b.c - b.c0 + cross(b.turned, c.rB);
-        return c.depth0 - dot(db - da, c.n);
+        const auto shift = [](const Group &g, const Vec3 &r) {
+            return moves(g) || g.kinematic ? g.c - g.c0 + cross(g.turned, r) : Vec3{};
+        };
+        return c.depth0 - dot(shift(b, c.rB) - shift(a, c.rA), c.n);
     }
 
     void World::Impl::updateTurned() {
-        for (Group &g : groups) g.turned = rotationVectorOf(g.q * conjugate(g.q0));
+        for (int gi : steppedGroups) {
+            Group &g = groups[std::size_t(gi)];
+            g.turned = rotationVectorOf(g.q * conjugate(g.q0));
+        }
     }
 
     void World::Impl::prepareContacts() {

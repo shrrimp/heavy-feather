@@ -85,6 +85,8 @@ namespace hf {
         int island = -1; // its moving end's
         // Sub-steps left of an impact: a gap closed in this one, and the next warm-starts with what stopped it.
         int impact = 0;
+        bool fromKept = false; // the world kept it between sleepers: its impulses are its own warm start
+        bool absorbed = false; // handed again for a contact the world keeps, which took its fresh look at it
     };
 
     // A contact end on a machine: its rows through the machine's mobility, n doubles each, in the arena as
@@ -249,6 +251,12 @@ namespace hf {
         std::vector<double> responseArena;
         std::vector<LinkRun> runs[2]; // per machine: on its velocity, and on its pseudo-velocity
         std::vector<WarmStart> warm;  // sorted by key
+        // Contacts between bodies that are all asleep or static, kept from step to step with their impulses, so the
+        // host hands only pairs with an awake end. Sorted by key.
+        std::vector<ContactData> kept, keptScratch, newlyKept;
+        // This step's handed contacts by key, and which pairs were handed: open addressing, reused step to step.
+        std::vector<int> handedByKey, handedByPair;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> keptPairs; // built when a lost support needs them
         // The rows of machines just rebuilt, so their first solve still warm-starts.
         std::vector<std::pair<std::uint64_t, RowState>> carriedRows;
         std::vector<int> groupDepth;
@@ -284,6 +292,9 @@ namespace hf {
         std::vector<Touch> touches, touchScratch;
         std::vector<int> linkStart, linkOf, floodDepth, floodQueue, unitOf, unitSteps, islandOf;
         int islands = 0;
+        // This step's moving and kinematic groups, and its stepped machines: what a sub-step loops over.
+        std::vector<int> steppedGroups, steppedMachines;
+        std::vector<std::uint32_t> forced; // bodies with a force or torque for the next step
         // Contacts.cpp: per island, its rows (in prep), its springs and its machines, and whether it holds a machine.
         std::vector<int> rowStart, springStart, springOrder, machineStart, machineOrder, heads;
         std::vector<std::uint8_t> machineIsland;
@@ -316,6 +327,7 @@ namespace hf {
 
         // MachineRows.cpp
         void beginDrives(double dt);
+        void beginDrive(JointSlot &j, double dt);
         void solveInternal(MachineData &md);
         void afterContacts(MachineData &md);
         void solvePositions(MachineData &md);
@@ -335,6 +347,7 @@ namespace hf {
         void solveContactPositions();
         void restitution();
         void storeContacts();
+        void keepResting(); // once the step is done: contacts left between sleepers stay in the world
 
         // RigidRows.cpp
         void beginRigidRows();             // once a step, after beginContacts

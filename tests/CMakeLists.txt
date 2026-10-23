@@ -28,6 +28,7 @@ set(HF_TEST_SOURCES
   MachineTests.cpp
   MechanismTests.cpp
   MemoryTests.cpp
+  RestingTests.cpp
   SleepTests.cpp
   SpatialTests.cpp
   StressTests.cpp

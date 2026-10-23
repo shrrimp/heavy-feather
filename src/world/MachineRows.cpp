@@ -464,8 +464,12 @@ namespace hf {
     // target at the drive's speed, as commanded motion the velocity drive carries; whatever the target jumped beyond
     // that is reached over later steps.
     void World::Impl::beginDrives(double dt) {
-        for (JointSlot &j : joints) {
-            if (!j.alive) continue;
+        for (int mi : steppedMachines)
+            for (const JointRef &r : machines[std::size_t(mi)].joints) beginDrive(joints[r.joint], dt);
+    }
+
+    void World::Impl::beginDrive(JointSlot &j, double dt) {
+        {
             JointDesc &d = j.desc;
             if (positionDrive(d.type)) {
                 j.positionPrev = j.position;

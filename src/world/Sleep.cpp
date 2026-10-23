@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 #include "world/WorldImpl.hpp"
@@ -24,6 +25,29 @@ namespace hf {
         constexpr std::uint64_t kForgetAge = 4;
 
         std::uint64_t keyOf(BodyId id) { return (std::uint64_t(id.index) << 32) | id.generation; }
+
+        std::uint64_t hashOf(BodyId a, BodyId b, std::uint64_t feature) {
+            std::uint64_t h = keyOf(a) * 0x9E3779B97F4A7C15ull;
+            h ^= (keyOf(b) + 0x632BE59BD9B4E019ull + (h << 6) + (h >> 2)) * 0xC2B2AE3D27D4EB4Full;
+            h ^= (feature + 0x165667B19E3779F9ull + (h << 6) + (h >> 2)) * 0x94D049BB133111EBull;
+            return h ^ (h >> 31);
+        }
+
+        // An open-addressing table of contact indices, sized for count entries at most half full.
+        void clearTable(std::vector<int> &table, std::size_t count) {
+            std::size_t size = 16;
+            while (size < 2 * count) size *= 2;
+            table.assign(size, -1);
+        }
+
+        // The slot holding the entry same() matches, or the empty slot it would go in.
+        template <typename Same>
+        std::size_t probe(const std::vector<int> &table, std::uint64_t hash, Same same) {
+            const std::size_t mask = table.size() - 1;
+            std::size_t i = std::size_t(hash) & mask;
+            while (table[i] >= 0 && !same(table[i])) i = (i + 1) & mask;
+            return i;
+        }
         BodyId idOf(std::uint64_t key) { return {std::uint32_t(key >> 32), std::uint32_t(key)}; }
 
         bool sweeping(const Group &g) { return g.kinematic && (g.v != Vec3{} || g.w != Vec3{}); }
@@ -80,8 +104,18 @@ namespace hf {
                     I.floodQueue.push_back(o);
                 }
             }
-            for (std::size_t g = 0; g < G; ++g) I.groups[g].frozen = !I.groups[g].isStatic && !I.reached[g];
-            for (MachineData &md : I.machines) md.frozen = I.groups[std::size_t(md.groupOfLink[0])].frozen;
+            I.steppedGroups.clear();
+            for (std::size_t g = 0; g < G; ++g) {
+                Group &gr = I.groups[g];
+                gr.frozen = !gr.isStatic && !I.reached[g];
+                if (moves(gr) || gr.kinematic) I.steppedGroups.push_back(int(g));
+            }
+            I.steppedMachines.clear();
+            for (std::size_t mi = 0; mi < I.machines.size(); ++mi) {
+                MachineData &md = I.machines[mi];
+                md.frozen = I.groups[std::size_t(md.groupOfLink[0])].frozen;
+                if (!md.frozen) I.steppedMachines.push_back(int(mi));
+            }
         }
 
         // The stepped groups split into islands: what touches or is jointed to what. Each one is a solve of its own.
@@ -115,6 +149,55 @@ namespace hf {
 
     void World::Impl::beginSleep() {
         ++stepCount;
+        // What the world kept between sleepers is gone with a body that's gone, the host moved, or reshaped, whose
+        // touches wake. A contact the host hands again is the host's fresh look at one it keeps: that takes it in and
+        // keeps its impulses. Any other it kept for a pair the host handed is gone.
+        if (!kept.empty()) {
+            clearTable(handedByKey, contacts.size());
+            clearTable(handedByPair, contacts.size());
+            for (std::size_t i = 0; i < contacts.size(); ++i) {
+                const Contact &in = contacts[i].in;
+                const auto sameKey = [&](int j) {
+                    const Contact &o = contacts[std::size_t(j)].in;
+                    return o.a == in.a && o.b == in.b && o.feature == in.feature;
+                };
+                const auto samePair = [&](int j) {
+                    const Contact &o = contacts[std::size_t(j)].in;
+                    return o.a == in.a && o.b == in.b;
+                };
+                int &byKey = handedByKey[probe(handedByKey, hashOf(in.a, in.b, in.feature), sameKey)];
+                if (byKey < 0) byKey = int(i);
+                int &byPair = handedByPair[probe(handedByPair, hashOf(in.a, in.b, 0), samePair)];
+                if (byPair < 0) byPair = int(i);
+            }
+        }
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < kept.size(); ++i) {
+            ContactData &c = kept[i];
+            BodySlot *a = body(c.in.a), *b = body(c.in.b);
+            if (!a || !b || a->teleported || b->teleported) continue;
+            if (a->reshaped || b->reshaped) {
+                a->wakeNext = b->wakeNext = true;
+                continue;
+            }
+            const int byKey = handedByKey[probe(handedByKey, hashOf(c.in.a, c.in.b, c.in.feature), [&](int j) {
+                const Contact &o = contacts[std::size_t(j)].in;
+                return o.a == c.in.a && o.b == c.in.b && o.feature == c.in.feature;
+            })];
+            if (byKey >= 0) {
+                ContactData &handed = contacts[std::size_t(byKey)];
+                c.in = handed.in;
+                handed.absorbed = true;
+            } else if (handedByPair[probe(handedByPair, hashOf(c.in.a, c.in.b, 0), [&](int j) {
+                           const Contact &o = contacts[std::size_t(j)].in;
+                           return o.a == c.in.a && o.b == c.in.b;
+                       })] >= 0) {
+                continue;
+            }
+            if (k != i) kept[k] = c;
+            ++k;
+        }
+        kept.resize(k);
         if (reshapedAny) {
             for (const ContactData &c : contacts) {
                 BodySlot *a = body(c.in.a), *b = body(c.in.b);
@@ -144,17 +227,34 @@ namespace hf {
         // The pairs touching now. One that touched lately, has an awake end so the host looked, and touches no
         // more has lost its support: both wake next step, which is soon enough for something that was resting.
         touchScratch.clear();
-        for (const ContactData &c : contacts) touchScratch.push_back(touchOf(c.in.a, c.in.b, stepCount));
+        // A contact the world keeps, handed again, is between sleepers: no support is lost there.
+        for (const ContactData &c : contacts)
+            if (!c.absorbed) touchScratch.push_back(touchOf(c.in.a, c.in.b, stepCount));
         std::sort(touchScratch.begin(), touchScratch.end());
         touchScratch.erase(std::unique(touchScratch.begin(), touchScratch.end(),
                                        [](const Touch &x, const Touch &y) { return !(x < y) && !(y < x); }),
                            touchScratch.end());
         const std::size_t now = touchScratch.size();
+        bool keptPairsBuilt = false;
         for (const Touch &t : touches) {
             const std::uint64_t age = stepCount - t.step;
             if (age > kForgetAge || std::binary_search(touchScratch.begin(), touchScratch.begin() + long(now), t))
                 continue;
             if (age >= kLostSupport && (awake(t.a) || awake(t.b))) {
+                // A pair the world keeps still touches, though the host no longer hands it.
+                if (!keptPairsBuilt) {
+                    keptPairs.clear();
+                    for (const ContactData &c : kept) {
+                        const std::uint64_t a = keyOf(c.in.a), b = keyOf(c.in.b);
+                        keptPairs.push_back({std::min(a, b), std::max(a, b)});
+                    }
+                    std::sort(keptPairs.begin(), keptPairs.end());
+                    keptPairsBuilt = true;
+                }
+                if (std::binary_search(keptPairs.begin(), keptPairs.end(), std::pair{t.a, t.b})) {
+                    touchScratch.push_back({t.a, t.b, stepCount});
+                    continue;
+                }
                 wakeNext(*this, t.a);
                 wakeNext(*this, t.b);
             }
@@ -175,7 +275,7 @@ namespace hf {
         };
         for (const ContactData &c : contacts) {
             const BodySlot *a = body(c.in.a), *b = body(c.in.b);
-            if (!a || !b) continue;
+            if (!a || !b || c.absorbed) continue; // its kept twin links them
             Vec3 ca, va, wa, cb, vb, wb;
             Quat q;
             bodyState(*a, ca, q, va, wa);
@@ -186,6 +286,7 @@ namespace hf {
         for (const Touch &t : touches)
             if (stepCount - t.step <= kConductAge && t.step != stepCount)
                 link(body(idOf(t.a)), body(idOf(t.b)), {.conducts = true});
+        for (const ContactData &c : kept) link(body(c.in.a), body(c.in.b), {.touching = true, .conducts = true});
         for (const JointSlot &j : joints)
             if (j.alive && j.desc.a.valid() && j.desc.b.valid())
                 link(body(j.desc.a), body(j.desc.b), {.conducts = true, .jointed = true});
@@ -286,6 +387,11 @@ namespace hf {
             if (t.a == key || t.b == key) {
                 wakeNext(*this, t.a);
                 wakeNext(*this, t.b);
+            }
+        for (const ContactData &c : kept)
+            if (c.in.a == id || c.in.b == id) {
+                wakeNext(*this, keyOf(c.in.a));
+                wakeNext(*this, keyOf(c.in.b));
             }
     }
 

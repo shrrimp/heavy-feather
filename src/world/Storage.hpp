@@ -33,6 +33,7 @@ namespace hf {
         // reading the body back from its group; it was moved by the host, so its contacts and rows start cold.
         bool poseWritten = false, velocityWritten = false, teleported = false;
         bool listed = false; // in World::Impl::written
+        bool forced = false; // in World::Impl::forced
         bool kinematic = false;
         bool hasTarget = false; // kinematic: where the host wants it once the next step is done
         Vec3 targetPosition{};

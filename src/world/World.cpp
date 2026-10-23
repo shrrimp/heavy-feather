@@ -143,6 +143,7 @@ namespace hf {
         BodySlot fresh;
         fresh.generation = b.generation;
         fresh.listed = b.listed;
+        fresh.forced = b.forced;
         b = fresh;
         b.desc = desc;
         b.desc.orientation = normalize(desc.orientation);
@@ -299,6 +300,10 @@ namespace hf {
         if (force != Vec3{}) wakeUp(b);
         b->force += force;
         b->torque += cross(point - position(id), force);
+        if (!b->forced) {
+            b->forced = true;
+            impl_->forced.push_back(id.index);
+        }
         return true;
     }
 
@@ -308,6 +313,10 @@ namespace hf {
         if (!finite(torque)) return impl_->reject(false);
         if (torque != Vec3{}) wakeUp(b);
         b->torque += torque;
+        if (!b->forced) {
+            b->forced = true;
+            impl_->forced.push_back(id.index);
+        }
         return true;
     }
 
