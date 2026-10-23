@@ -227,6 +227,8 @@ namespace hf {
             p.soft = gap ? SoftParams::rigid() : SoftParams::fromHertz(kContactHertz, kContactDamping, h);
 
             addMachineSides(*this, p, c);
+            // Neither end can move along the normal, so the contact can do nothing, and its rows would divide by zero.
+            if (!(p.kn > 0.0)) continue;
             apply(*this, p, c, c.ln, c.lt1, c.lt2);
             if (p.turns) applyTurn(*this, p, c.lr1, c.lr2, c.ls);
 
@@ -274,7 +276,8 @@ namespace hf {
         // The friction pair's new accumulated impulse, clamped to the cone. With a machine end the 2×2 block is solved
         // exactly: a wheel's mobility lies along its rolling direction, and a row-by-row step diverges on it.
         void frictionStep(const ContactPrep &p, const RowVelocity &v, double maxT, double &lt1, double &lt2) {
-            double d1 = -v.t1 / p.kt1, d2 = -v.t2 / p.kt2;
+            // A direction neither end can move along takes no impulse: a hinge's axis on a face square to it.
+            double d1 = p.kt1 > 0.0 ? -v.t1 / p.kt1 : 0.0, d2 = p.kt2 > 0.0 ? -v.t2 / p.kt2 : 0.0;
             if (p.ns > 0) {
                 const double a = p.kt1, b = p.kt12, d = p.kt2;
                 const double det = a * d - b * b;
