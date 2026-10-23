@@ -40,8 +40,9 @@ It started as a prototype loosely implemented in Heavy Metal, which worked well 
 - **v0.1:** Machines, motors, contacts, friction, and a simple API (done)
 - **v0.2:** Enhanced contacts for mechanisms: cams, gears and other contact-driven parts (done)
 - **v0.3:** CCD, sub-steps, simulation islands and sleeping (done)
-- **v0.4:** Break stuff: breakable joints, and load analysis for rigid-body rupture
-- **v0.5:** Performance and multi-threading
+- **v0.4:** Robust, and moved by the host: a fault tripwire that rolls an island back before a NaN leaves it, inputs checked at the API, and one call for each way a host moves a body: kinematic bodies, whole machines moved rigidly, anchors that carry what hangs on them
+- **v0.5:** Performance and multi-threading: each island solved on its own budget, lean contact rows, resting contacts kept in the library, no whole-world rebuilds; joints posed directly and a mouse grab; then islands solved in parallel
+- **v0.6:** Break stuff: body frames apart from the centre of mass, breakable joints, and load analysis for rigid-body rupture
 - **v1.0:** Clean API, docs, and a basic host for testing and demos
 - **Later:** A follower-on-profile joint, for cams that are exact without any collision geometry
 
