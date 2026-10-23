@@ -183,4 +183,8 @@ namespace hf {
         for (std::size_t mi = 0; mi < I.runs[pseudo].size(); ++mi) flushRun(I, int(mi), pseudo);
     }
 
+    void flushRuns(World::Impl &I, bool pseudo, const int *machines, int count) {
+        for (int k = 0; k < count; ++k) flushRun(I, machines[k], pseudo);
+    }
+
 } // namespace hf

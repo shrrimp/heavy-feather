@@ -14,8 +14,8 @@ namespace hf {
     namespace {
 
         constexpr int kRestitutionIterations = 4;
-        constexpr int kSolverIterations = 16; // per step, split across the sub-steps
         constexpr int kProximalOuter = 4;
+        // A machine island's relaxing and position sweeps, per sub-step.
         constexpr int kRelaxIterations = 2;
         constexpr int kPositionIterations = 16;
 
@@ -106,6 +106,40 @@ namespace hf {
         for (const ContactData &c : contacts) contactScratch[depthStart[depthOf(c)]++] = c;
         contacts.swap(contactScratch);
 
+        // Then island by island, each in that order: an island is solved whole, on its own budget. One holding a
+        // machine, a mechanism contact or a loose spring is a machine island.
+        const std::size_t L = std::size_t(islands);
+        machineIsland.assign(L, 0);
+        machineStart.assign(L + 1, 0);
+        for (const MachineData &md : machines) {
+            if (md.frozen) continue;
+            const int island = groups[std::size_t(md.groupOfLink[0])].island;
+            machineIsland[std::size_t(island)] = 1;
+            ++machineStart[std::size_t(island) + 1];
+        }
+        for (std::size_t i = 1; i <= L; ++i) machineStart[i] += machineStart[i - 1];
+        machineOrder.resize(std::size_t(machineStart[L]));
+        heads.assign(machineStart.begin(), machineStart.end() - 1);
+        for (std::size_t mi = 0; mi < machines.size(); ++mi) {
+            if (machines[mi].frozen) continue;
+            const int island = groups[std::size_t(machines[mi].groupOfLink[0])].island;
+            machineOrder[std::size_t(heads[std::size_t(island)]++)] = int(mi);
+        }
+        for (const JointRef &r : looseSprings)
+            for (int g : {r.A.group, r.B.group})
+                if (moves(groups[std::size_t(g)])) machineIsland[std::size_t(groups[std::size_t(g)].island)] = 1;
+        rowStart.assign(L + 1, 0);
+        for (ContactData &c : contacts) {
+            const Group &a = groups[std::size_t(c.ga)];
+            c.island = moves(a) ? a.island : groups[std::size_t(c.gb)].island;
+            if (c.in.mechanism) machineIsland[std::size_t(c.island)] = 1;
+            ++rowStart[std::size_t(c.island) + 1];
+        }
+        for (std::size_t i = 1; i <= L; ++i) rowStart[i] += rowStart[i - 1];
+        heads.assign(rowStart.begin(), rowStart.end() - 1);
+        for (const ContactData &c : contacts) contactScratch[std::size_t(heads[std::size_t(c.island)]++)] = c;
+        contacts.swap(contactScratch);
+
         for (MachineData &md : machines) md.contacts.clear();
         for (std::size_t i = 0; i < contacts.size(); ++i)
             if (contacts[i].machine >= 0) machines[std::size_t(contacts[i].machine)].contacts.push_back(int(i));
@@ -170,15 +204,19 @@ namespace hf {
             if (c.machine >= 0) continue;
             Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
             c.depth = contactDepth(c);
+            if (c.impact > 0) --c.impact;
 
             // A gap is speculative: a rigid row that lets the pair close it within the sub-step and no faster, so a
             // fast body stops on a surface instead of passing through it. One the pair isn't closing fast enough to
             // reach this sub-step, with room to spare, could only solve to zero: the next sub-step looks again.
             const bool gap = c.depth < 0.0;
-            if (gap && c.lnMax <= 0.0) {
-                const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
-                if (-dot(vb - va, c.n) * h * kGapReach < -c.depth) continue;
-            }
+            const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
+            const double approach = -dot(vb - va, c.n);
+            if (gap && c.lnMax <= 0.0 && approach * h * kGapReach < -c.depth) continue;
+            // An impact: one sweep of a few corners can't share out the impulse that stops it, nor take it back once
+            // the next sub-step warm-starts with it, so its rows are swept as a machine's are, this sub-step and the
+            // next. Resting, nothing approaches faster than gravity gives it in a sub-step.
+            if (approach > kRestitutionMinSpeed) c.impact = 2;
 
             ContactPrep p;
             p.contact = int(ci);
@@ -243,6 +281,24 @@ namespace hf {
             prep.push_back(p);
         }
         flushRuns(*this, false);
+
+        // The contacts came island by island, so the rows did too.
+        const std::size_t L = std::size_t(islands);
+        rowStart.assign(L + 1, 0);
+        for (const ContactPrep &p : prep) ++rowStart[std::size_t(contacts[std::size_t(p.contact)].island) + 1];
+        for (std::size_t i = 1; i <= L; ++i) rowStart[i] += rowStart[i - 1];
+        rowsOfKind[0] = rowsOfKind[1] = 0;
+        for (std::size_t i = 0; i < L; ++i) rowsOfKind[machineIsland[i]] += rowStart[i + 1] - rowStart[i];
+        // A rigid island's rows taking an impact, in its own order.
+        impactStart.assign(L + 1, 0);
+        impactRows.clear();
+        for (std::size_t i = 0; i < L; ++i) {
+            impactStart[i] = int(impactRows.size());
+            if (machineIsland[i]) continue;
+            for (int r = rowStart[i]; r < rowStart[i + 1]; ++r)
+                if (contacts[std::size_t(prep[std::size_t(r)].contact)].impact > 0) impactRows.push_back(r);
+        }
+        impactStart[L] = int(impactRows.size());
     }
 
     namespace {
@@ -342,9 +398,44 @@ namespace hf {
             if (p.turns) turnStep(I, p, c, lnn);
         }
 
-        void sweepBounded(World::Impl &I) {
-            for (MachineData &md : I.machines)
-                if (!md.frozen && md.m.boundedRows()) md.m.sweepBounded();
+        // An island's machines' capped drives and limits.
+        void sweepBounded(World::Impl &I, const int *machines, int count) {
+            for (int k = 0; k < count; ++k) {
+                MachineData &md = I.machines[std::size_t(machines[k])];
+                if (md.m.boundedRows()) md.m.sweepBounded();
+            }
+        }
+
+        // One island's part of a pass: its rows, its springs, its machines.
+        struct IslandPart {
+            int rowBegin, rowEnd, springBegin, springEnd, machineBegin, machineCount;
+            bool machine;
+        };
+
+        IslandPart partOf(const World::Impl &I, std::size_t island) {
+            return {I.rowStart[island],          I.rowStart[island + 1],
+                    I.springStart[island],       I.springStart[island + 1],
+                    I.machineStart[island],      I.machineStart[island + 1] - I.machineStart[island],
+                    I.machineIsland[island] != 0};
+        }
+
+        // A rigid island's impact rows, once the whole island has had its own sweeps: as many again as a machine
+        // island's, re-anchoring each outer pass as the solve does.
+        void sweepImpacts(World::Impl &I, std::size_t island, int iterations, bool relax) {
+            const int *rows = I.impactRows.data() + I.impactStart[island];
+            const int count = I.impactStart[island + 1] - I.impactStart[island];
+            if (count == 0 || iterations <= 0) return;
+            const int outer = relax ? 1 : std::min(kProximalOuter, iterations);
+            const int inner = std::max(1, iterations / outer);
+            for (int o = 0; o < outer; ++o) {
+                if (!relax)
+                    for (int r = 0; r < count; ++r) {
+                        ContactPrep &p = I.prep[std::size_t(rows[r])];
+                        p.refLn = I.contacts[std::size_t(p.contact)].ln;
+                    }
+                for (int k = 0; k < inner; ++k)
+                    for (int r = 0; r < count; ++r) sweepContact(I, I.prep[std::size_t(rows[r])], relax);
+            }
         }
 
     } // namespace
@@ -393,6 +484,20 @@ namespace hf {
             if (!(sp.k + sp.gamma > 0.0)) continue;
             springs.push_back(sp);
         }
+
+        // Island by island, as the rows are.
+        const std::size_t L = std::size_t(islands);
+        springStart.assign(L + 1, 0);
+        const auto springIsland = [&](const SpringPrep &sp) {
+            const Group &a = groups[std::size_t(sp.a)];
+            return std::size_t(moves(a) ? a.island : groups[std::size_t(sp.b)].island);
+        };
+        for (const SpringPrep &sp : springs) ++springStart[springIsland(sp) + 1];
+        for (std::size_t i = 1; i <= L; ++i) springStart[i] += springStart[i - 1];
+        springOrder.resize(springs.size());
+        heads.assign(springStart.begin(), springStart.end() - 1);
+        for (std::size_t k = 0; k < springs.size(); ++k)
+            springOrder[std::size_t(heads[springIsland(springs[k])]++)] = int(k);
     }
 
     namespace {
@@ -428,18 +533,25 @@ namespace hf {
     // The biased sweeps. The proximal anchor is re-taken each outer pass, so the impulse bleed cancels at the fixed
     // point. A machine's capped drives and limits are swept in the same loop as the contacts that load them.
     void World::Impl::solveContacts() {
-        const int iterations =
-            std::max(std::max(1, settings.contactIterations), kSolverIterations / std::max(1, settings.substeps));
-        const int outer = std::min(kProximalOuter, iterations);
-        const int inner = std::max(1, iterations / outer);
-        for (int o = 0; o < outer; ++o) {
-            for (ContactPrep &p : prep) p.refLn = contacts[std::size_t(p.contact)].ln;
-            for (int k = 0; k < inner; ++k) {
-                for (SpringPrep &sp : springs) sweepSpring(*this, sp);
-                for (ContactPrep &p : prep) sweepContact(*this, p, false);
-                flushRuns(*this, false);
-                sweepBounded(*this);
+        for (std::size_t island = 0; island < std::size_t(islands); ++island) {
+            const IslandPart part = partOf(*this, island);
+            if (part.rowBegin == part.rowEnd && part.springBegin == part.springEnd && part.machineCount == 0) continue;
+            const int *island_machines = machineOrder.data() + part.machineBegin;
+            const int iterations = std::max(1, part.machine ? settings.contactIterations : settings.rigidIterations);
+            const int outer = std::min(kProximalOuter, iterations);
+            const int inner = std::max(1, iterations / outer);
+            for (int o = 0; o < outer; ++o) {
+                for (int r = part.rowBegin; r < part.rowEnd; ++r)
+                    prep[std::size_t(r)].refLn = contacts[std::size_t(prep[std::size_t(r)].contact)].ln;
+                for (int k = 0; k < inner; ++k) {
+                    for (int s = part.springBegin; s < part.springEnd; ++s)
+                        sweepSpring(*this, springs[std::size_t(springOrder[std::size_t(s)])]);
+                    for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], false);
+                    flushRuns(*this, false, island_machines, part.machineCount);
+                    sweepBounded(*this, island_machines, part.machineCount);
+                }
             }
+            if (!part.machine) sweepImpacts(*this, island, std::max(1, settings.contactIterations), false);
         }
     }
 
@@ -452,33 +564,44 @@ namespace hf {
             const ContactData &c = contacts[std::size_t(p.contact)];
             p.vtarget = std::min(0.0, contactDepth(c)) / h;
         }
-        for (int k = 0; k < kRelaxIterations; ++k) {
-            for (ContactPrep &p : prep) sweepContact(*this, p, true);
-            flushRuns(*this, false);
-            sweepBounded(*this);
+        for (std::size_t island = 0; island < std::size_t(islands); ++island) {
+            const IslandPart part = partOf(*this, island);
+            const int *island_machines = machineOrder.data() + part.machineBegin;
+            const int iterations = part.machine ? kRelaxIterations : std::max(0, settings.rigidRelaxIterations);
+            for (int k = 0; k < iterations; ++k) {
+                for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], true);
+                flushRuns(*this, false, island_machines, part.machineCount);
+                sweepBounded(*this, island_machines, part.machineCount);
+            }
+            if (!part.machine) sweepImpacts(*this, island, kRelaxIterations, true);
         }
     }
 
     void World::Impl::solveContactPositions() {
-        for (int k = 0; k < kPositionIterations; ++k)
-            for (ContactPrep &p : prep) {
-                if (p.posBias == 0.0) continue;
-                const ContactData &c = contacts[std::size_t(p.contact)];
-                const double dl = (p.posBias - rowVelocity(*this, p, c, true).n) / p.kn;
-                const double nl = std::max(0.0, p.pseudo + dl); // push only, like the velocity row
-                const double app = nl - p.pseudo;
-                p.pseudo = nl;
-                Group &a = groups[std::size_t(p.a)], &b = groups[std::size_t(p.b)];
-                if (p.writeA) {
-                    a.pv -= p.imA * app * c.n;
-                    a.pw -= app * p.imR1cn;
+        for (std::size_t island = 0; island < std::size_t(islands); ++island) {
+            const IslandPart part = partOf(*this, island);
+            const int iterations = part.machine ? kPositionIterations : std::max(0, settings.rigidPositionIterations);
+            for (int k = 0; k < iterations; ++k)
+                for (int r = part.rowBegin; r < part.rowEnd; ++r) {
+                    ContactPrep &p = prep[std::size_t(r)];
+                    if (p.posBias == 0.0) continue;
+                    const ContactData &c = contacts[std::size_t(p.contact)];
+                    const double dl = (p.posBias - rowVelocity(*this, p, c, true).n) / p.kn;
+                    const double nl = std::max(0.0, p.pseudo + dl); // push only, like the velocity row
+                    const double app = nl - p.pseudo;
+                    p.pseudo = nl;
+                    Group &a = groups[std::size_t(p.a)], &b = groups[std::size_t(p.b)];
+                    if (p.writeA) {
+                        a.pv -= p.imA * app * c.n;
+                        a.pw -= app * p.imR1cn;
+                    }
+                    if (p.writeB) {
+                        b.pv += p.imB * app * c.n;
+                        b.pw += app * p.imR2cn;
+                    }
+                    machineImpulse(*this, p, true, 1, &app);
                 }
-                if (p.writeB) {
-                    b.pv += p.imB * app * c.n;
-                    b.pw += app * p.imR2cn;
-                }
-                machineImpulse(*this, p, true, 1, &app);
-            }
+        }
         flushRuns(*this, true);
     }
 

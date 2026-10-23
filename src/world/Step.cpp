@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -44,6 +45,23 @@ namespace hf {
         }
 #endif
 
+        // A step's phases, timed into a StepProfile when the host asks.
+        struct Laps {
+            using Clock = std::chrono::steady_clock;
+            bool on = false;
+            Clock::time_point t{};
+
+            explicit Laps(bool profile) : on(profile) {
+                if (on) t = Clock::now();
+            }
+            void lap(double &into) {
+                if (!on) return;
+                const Clock::time_point now = Clock::now();
+                into += std::chrono::duration<double, std::milli>(now - t).count();
+                t = now;
+            }
+        };
+
         void integrateRigid(Group &g, double h) {
             g.correction = (length(g.pv) + length(g.pw) * g.radius) * h;
             g.c += (g.v + g.pv) * h;
@@ -70,6 +88,8 @@ namespace hf {
         if (!(dt > 0.0)) return;
         const int n = std::max(1, settings.substeps);
         h = dt / n;
+        StepProfile profile;
+        Laps laps(settings.profile);
 
         build();
         // A machine the host moved starts its rows cold.
@@ -100,6 +120,7 @@ namespace hf {
         beginFaults();
         beginDrives(dt);
         beginContacts();
+        laps.lap(profile.begin);
 
         for (int i = 0; i < n; ++i) {
 #ifndef NDEBUG
@@ -120,6 +141,7 @@ namespace hf {
             for (MachineData &md : machines)
                 if (stepped(md)) solveInternal(md);
             afterPhase(FaultPhase::Internal, i);
+            laps.lap(profile.machines);
 
             prepareContacts();
             prepareSprings();
@@ -128,6 +150,7 @@ namespace hf {
             for (MachineData &md : machines)
                 if (stepped(md)) afterContacts(md);
             afterPhase(FaultPhase::AfterContacts, i);
+            laps.lap(profile.contacts);
 
             for (MachineData &md : machines)
                 if (stepped(md)) solvePositions(md);
@@ -136,6 +159,7 @@ namespace hf {
             for (Group &g : groups)
                 if (rigid(g)) clampCorrection(g, h, settings.maxCorrection);
             afterPhase(FaultPhase::ContactPositions, i);
+            laps.lap(profile.positions);
 
             for (MachineData &md : machines)
                 if (stepped(md)) integrate(md);
@@ -144,11 +168,13 @@ namespace hf {
                 else if (g.kinematic) moveKinematic(g, double(i + 1) * h, i == n - 1);
             }
             afterPhase(FaultPhase::Integrate, i);
+            laps.lap(profile.integrate);
 
             relaxContacts();
             for (MachineData &md : machines)
                 if (stepped(md)) writeVelocities(md);
             afterPhase(FaultPhase::Relax, i);
+            laps.lap(profile.relax);
         }
 
         for (JointSlot &j : joints)
@@ -172,6 +198,8 @@ namespace hf {
         stats.groupRebuilds = groupRebuilds;
         stats.machineRebuilds = machineRebuilds;
         rejected = groupRebuilds = machineRebuilds = 0;
+        stats.rigidRows = rowsOfKind[0];
+        stats.machineRows = rowsOfKind[1];
         stats.contacts = int(prep.size());
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
@@ -191,6 +219,10 @@ namespace hf {
             if (moves(g) && !faulted(g)) b.faultStreak = 0;
         }
         stats.islands = islands;
+        laps.lap(profile.end);
+        profile.total = profile.begin + profile.machines + profile.contacts + profile.positions + profile.integrate +
+                        profile.relax + profile.end;
+        stats.profile = profile;
     }
 
 } // namespace hf

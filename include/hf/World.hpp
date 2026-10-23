@@ -16,9 +16,13 @@ namespace hf {
     struct WorldSettings {
         Vec3 gravity{0.0, -9.81, 0.0};
         int substeps = 16;
-        // Contact sweeps per sub-step, at least. More converge heavy wheeled machines, whose contacts and joints
-        // otherwise settle into a slow jitter, at a cost in large piles.
+        // Each island is solved on its own budget. An island holding a machine (its links, a mechanism contact or a
+        // loose spring) sweeps its contacts this many times a sub-step: more converge heavy wheeled machines, whose
+        // contacts and joints otherwise settle into a slow jitter.
         int contactIterations = 8;
+        // An island of rigid bodies alone: its velocity sweeps, the relaxing sweeps after integrating, and the
+        // position sweeps, per sub-step. Sub-steps do the converging there; a pile pays for each sweep in every row.
+        int rigidIterations = 1, rigidRelaxIterations = 1, rigidPositionIterations = 2;
         double maxCorrection = 0.05; // m: the furthest a position correction may move a body in one sub-step
         bool sleeping = true;        // still bodies stop being stepped until something wakes them
         // m/s: a body whose fastest point moves faster than this at the end of a step is a fault, like a NaN.
@@ -26,6 +30,19 @@ namespace hf {
         // Looks for a NaN after every phase of every sub-step, not only once the step is done, so a fault names the
         // phase it appeared in. For probes and debugging: it costs a pass over the stepped bodies per phase.
         bool checkPhases = false;
+        bool profile = false; // times each phase of a step into WorldStats::profile
+    };
+
+    // Where a step's time went, in ms, with WorldSettings::profile on.
+    struct StepProfile {
+        double total = 0.0;
+        double begin = 0.0;     // rebuilds, sleep and islands, drives, the contacts taken in
+        double machines = 0.0;  // the machines' own solves: dynamics, joints, drives
+        double contacts = 0.0;  // contact rows prepared and swept, with the machines' answers
+        double positions = 0.0; // both position passes
+        double integrate = 0.0;
+        double relax = 0.0;
+        double end = 0.0; // restitution, the fault check, warm starts, sleep, what moved
     };
 
     struct WorldStats {
@@ -38,6 +55,8 @@ namespace hf {
         int rejected = 0;            // calls refused for values the world can't use, since the step before this one
         // Since the step before this one: whole-world rebuilds of the bodies' groups, and machines built.
         int groupRebuilds = 0, machineRebuilds = 0;
+        int rigidRows = 0, machineRows = 0; // swept contact rows in each kind of island, the last sub-step
+        StepProfile profile;
     };
 
     // Bodies, joints and the host's contacts in; poses out. Jointed bodies are grouped into machines, each solved

@@ -82,6 +82,9 @@ namespace hf {
         // the friction directions of its rows.
         int machine = -1, row = -1;
         Vec3 t1{}, t2{};
+        int island = -1; // its moving end's
+        // Sub-steps left of an impact: a gap closed in this one, and the next warm-starts with what stopped it.
+        int impact = 0;
     };
 
     // A contact end on a machine: its rows through the machine's mobility, n doubles each, in the arena as
@@ -195,6 +198,7 @@ namespace hf {
     void machineVelocity(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, double *v);
     void machineImpulse(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, const double *l);
     void flushRuns(World::Impl &I, bool pseudo);
+    void flushRuns(World::Impl &I, bool pseudo, const int *machines, int count);
 
     struct HF_NO_EXPORT World::Impl {
         WorldSettings settings;
@@ -250,6 +254,12 @@ namespace hf {
         std::vector<Touch> touches, touchScratch;
         std::vector<int> linkStart, linkOf, floodDepth, floodQueue, unitOf, unitSteps, islandOf;
         int islands = 0;
+        // Contacts.cpp: per island, its rows (in prep), its springs and its machines, and whether it holds a machine.
+        std::vector<int> rowStart, springStart, springOrder, machineStart, machineOrder, heads;
+        std::vector<std::uint8_t> machineIsland;
+        std::vector<int> impactRows; // the rows taking an impact this sub-step, island by island (impactStart)
+        std::vector<int> impactStart;
+        int rowsOfKind[2] = {0, 0}; // rigid, machine
         std::vector<std::uint8_t> seeded, reached, unitStepped, unitStill, unitAsleep, unitVetoed;
 
         BodySlot *body(BodyId id);

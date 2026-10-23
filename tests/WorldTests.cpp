@@ -192,6 +192,7 @@ TEST_CASE("a contact iteration count of zero or less still sweeps once") {
     for (const int count : {0, -5}) {
         WorldSettings settings;
         settings.contactIterations = count;
+        settings.rigidIterations = count;
         World w(settings);
         const BodyId ground = addGround(w);
         const Vec3 half{0.5, 0.5, 0.5};
