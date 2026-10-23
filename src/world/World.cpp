@@ -26,6 +26,60 @@ namespace hf {
             return aOk && bOk && !(d.a == d.b);
         }
 
+        bool finite(const Vec3 &v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
+        // A rotation the world can normalise: finite, and not of almost no length.
+        bool rotation(const Quat &q) {
+            return std::isfinite(q.w) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) &&
+                   length(q) >= 1e-6;
+        }
+
+        // Symmetric to rounding, and positive definite: every leading minor above zero.
+        bool inertia(const Mat3 &I) {
+            double size = 0.0;
+            for (int c = 0; c < 3; ++c)
+                for (int r = 0; r < 3; ++r) {
+                    if (!std::isfinite(I[c][r])) return false;
+                    size = std::max(size, std::fabs(I[c][r]));
+                }
+            for (int c = 0; c < 3; ++c)
+                for (int r = c + 1; r < 3; ++r)
+                    if (std::fabs(I[c][r] - I[r][c]) > 1e-9 * size) return false;
+            return I[0][0] > 0.0 && I[0][0] * I[1][1] - I[0][1] * I[1][0] > 0.0 && determinant(I) > 0.0;
+        }
+
+        // A dynamic body moves by its mass and inertia; a static one never uses them, so they only have to be numbers.
+        bool massProperties(bool isStatic, double mass, const Mat3 &I) {
+            if (isStatic) {
+                for (int c = 0; c < 3; ++c)
+                    if (!finite(I[c])) return false;
+                return std::isfinite(mass);
+            }
+            return std::isfinite(mass) && mass > 0.0 && inertia(I);
+        }
+
+        bool usable(const BodyDesc &d) {
+            return finite(d.position) && rotation(d.orientation) && finite(d.velocity) && finite(d.angularVelocity) &&
+                   std::isfinite(d.radius) && massProperties(d.isStatic, d.mass, d.inertia);
+        }
+
+        // At or above zero, and a number; infinite only where infinite means no limit.
+        bool nonNegative(double x, bool infinite = false) { return x >= 0.0 && (infinite || std::isfinite(x)); }
+
+        bool usable(const JointDesc &d) {
+            return finite(d.frameA.position) && rotation(d.frameA.rotation) && finite(d.frameB.position) &&
+                   rotation(d.frameB.rotation) && std::isfinite(d.target) && nonNegative(d.maxForce, true) &&
+                   nonNegative(d.forceSlew, true) && nonNegative(d.speed) && nonNegative(d.hertz) &&
+                   nonNegative(d.damping) && nonNegative(d.restLength) && !std::isnan(d.min) && !std::isnan(d.max) &&
+                   d.min <= d.max;
+        }
+
+        bool usable(const Contact &k) {
+            const double n = length(k.normal);
+            return finite(k.point) && std::isfinite(k.depth) && n >= 0.5 && n <= 2.0 && nonNegative(k.friction) &&
+                   nonNegative(k.rolling) && nonNegative(k.spinning) && std::isfinite(k.restitution);
+        }
+
         bool sameShape(const JointDesc &x, const JointDesc &y) {
             return x.type == y.type && x.a == y.a && x.b == y.b && x.frameA == y.frameA && x.frameB == y.frameB;
         }
@@ -82,6 +136,7 @@ namespace hf {
 
     BodyId World::addBody(const BodyDesc &desc) {
         Impl &I = *impl_;
+        if (!usable(desc)) return I.reject(BodyId{});
         std::uint32_t index;
         if (!I.freeBodies.empty()) {
             index = I.freeBodies.back();
@@ -171,14 +226,16 @@ namespace hf {
         return w;
     }
 
-    void World::setMassProperties(BodyId id, double mass, const Mat3 &inertia) {
+    bool World::setMassProperties(BodyId id, double mass, const Mat3 &inertia) {
         BodySlot *b = impl_->body(id);
-        if (!b) return;
+        if (!b) return false;
+        if (!massProperties(b->desc.isStatic, mass, inertia)) return impl_->reject(false);
         b->desc.mass = mass;
         b->desc.inertia = inertia;
         impl_->dirty = true;
         wakeUp(b);
         impl_->wakePartners(id);
+        return true;
     }
 
     void World::setStatic(BodyId id, bool isStatic) {
@@ -189,9 +246,10 @@ namespace hf {
         wakeUp(b);
     }
 
-    void World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
+    bool World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
         BodySlot *b = impl_->body(id);
-        if (!b) return;
+        if (!b) return false;
+        if (!finite(position) || !rotation(orientation)) return impl_->reject(false);
         const Quat qb = normalize(orientation);
         // A host writing back the pose it read isn't a push: only a real move wakes it.
         if (length(position - this->position(id)) > 1e-9 || std::fabs(dot(qb, this->orientation(id))) < 1.0 - 1e-12) {
@@ -200,45 +258,53 @@ namespace hf {
         }
         b->desc.position = position;
         b->desc.orientation = qb;
-        if (b->group < 0) return;
+        if (b->group < 0) return true;
         Group &g = impl_->groups[std::size_t(b->group)];
         g.q = normalize(qb * conjugate(b->rot));
         g.c = position - g.q * b->offset;
+        return true;
     }
 
-    void World::setVelocity(BodyId id, const Vec3 &velocity, const Vec3 &angularVelocity) {
+    bool World::setVelocity(BodyId id, const Vec3 &velocity, const Vec3 &angularVelocity) {
         BodySlot *b = impl_->body(id);
-        if (!b) return;
+        if (!b) return false;
+        if (!finite(velocity) || !finite(angularVelocity)) return impl_->reject(false);
         if (length(velocity - this->velocity(id)) > 1e-9 || length(angularVelocity - this->angularVelocity(id)) > 1e-9)
             wakeUp(b);
         b->desc.velocity = velocity;
         b->desc.angularVelocity = angularVelocity;
-        if (b->group < 0) return;
+        if (b->group < 0) return true;
         Group &g = impl_->groups[std::size_t(b->group)];
         // A sleeper keeps no velocity: a host writing back what it read leaves it still.
-        if (g.isStatic || b->asleep) return;
+        if (g.isStatic || b->asleep) return true;
         g.w = angularVelocity;
         g.v = velocity - cross(angularVelocity, g.q * b->offset);
+        return true;
     }
 
-    void World::applyForce(BodyId id, const Vec3 &force, const Vec3 &point) {
+    bool World::applyForce(BodyId id, const Vec3 &force, const Vec3 &point) {
         BodySlot *b = impl_->body(id);
-        if (!b) return;
+        if (!b) return false;
+        if (!finite(force) || !finite(point)) return impl_->reject(false);
         if (force != Vec3{}) wakeUp(b);
         b->force += force;
         b->torque += cross(point - position(id), force);
+        return true;
     }
 
-    void World::applyTorque(BodyId id, const Vec3 &torque) {
+    bool World::applyTorque(BodyId id, const Vec3 &torque) {
         BodySlot *b = impl_->body(id);
-        if (!b) return;
+        if (!b) return false;
+        if (!finite(torque)) return impl_->reject(false);
         if (torque != Vec3{}) wakeUp(b);
         b->torque += torque;
+        return true;
     }
 
     JointId World::addJoint(const JointDesc &desc) {
         Impl &I = *impl_;
         if (!attachable(I, desc)) return {};
+        if (!usable(desc)) return I.reject(JointId{});
         std::uint32_t index;
         if (!I.freeJoints.empty()) {
             index = I.freeJoints.back();
@@ -272,6 +338,7 @@ namespace hf {
         Impl &I = *impl_;
         JointSlot *j = I.joint(id);
         if (!j || !attachable(I, desc)) return false;
+        if (!usable(desc)) return I.reject(false);
         wakeEnds(I, j->desc);
         wakeEnds(I, desc);
         const bool reshape = !sameShape(j->desc, desc);
@@ -296,21 +363,25 @@ namespace hf {
         return j ? j->desc : JointDesc{};
     }
 
-    void World::setTarget(JointId id, double target) {
+    bool World::setTarget(JointId id, double target) {
         JointSlot *j = impl_->joint(id);
-        if (!j) return;
+        if (!j) return false;
+        if (!std::isfinite(target)) return impl_->reject(false);
         const double t = positionDrive(j->desc.type) ? std::clamp(target, j->desc.min, j->desc.max) : target;
         if (t != j->desc.target) wakeEnds(*impl_, j->desc);
         j->desc.target = t;
         j->commanded = true;
+        return true;
     }
 
-    void World::setLever(JointId id, double lever) {
+    bool World::setLever(JointId id, double lever) {
         JointSlot *j = impl_->joint(id);
-        if (!j) return;
+        if (!j) return false;
+        if (!std::isfinite(lever)) return impl_->reject(false);
         if (std::clamp(lever, -1.0, 1.0) != j->lever) wakeEnds(*impl_, j->desc);
         j->lever = std::clamp(lever, -1.0, 1.0);
         if (j->desc.type == JointType::Motor) j->desc.target = j->lever * j->desc.speed;
+        return true;
     }
 
     double World::target(JointId id) const {
@@ -370,12 +441,15 @@ namespace hf {
 
     void World::clearContacts() { impl_->contacts.clear(); }
 
-    void World::addContact(const Contact &contact) {
-        if (!impl_->body(contact.a) || !impl_->body(contact.b) || contact.a == contact.b) return;
+    bool World::addContact(const Contact &contact) {
+        if (!impl_->body(contact.a) || !impl_->body(contact.b) || contact.a == contact.b) return false;
+        if (!usable(contact)) return impl_->reject(false);
         ContactData c;
         c.in = contact;
         c.in.normal = normalize(contact.normal);
+        c.in.restitution = std::clamp(contact.restitution, 0.0, 1.0);
         impl_->contacts.push_back(c);
+        return true;
     }
 
     void World::step(double dt) { impl_->step(dt); }
@@ -386,5 +460,7 @@ namespace hf {
         s.joints = int(impl_->joints.size() - impl_->freeJoints.size());
         return s;
     }
+
+    std::span<const Fault> World::faults() const { return impl_->faults; }
 
 } // namespace hf

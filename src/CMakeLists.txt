@@ -16,6 +16,7 @@ set(HF_SOURCES
   math/Dense.cpp
   solver/BoxLcp.cpp
   solver/Machine.cpp
+  world/Faults.cpp
   world/Groups.cpp
   world/MachineRows.cpp
   world/Machines.cpp

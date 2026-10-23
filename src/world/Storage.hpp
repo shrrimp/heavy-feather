@@ -27,6 +27,7 @@ namespace hf {
         bool asleep = false, wakeNext = false;
         int stillSteps = 0;
         bool reshaped = false; // until the next step: whatever its contacts then touch wakes
+        int faultStreak = 0;   // consecutive steps its island has been put back
     };
 
     struct JointSlot {

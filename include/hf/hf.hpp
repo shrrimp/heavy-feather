@@ -2,6 +2,7 @@
 
 #include "hf/Body.hpp"
 #include "hf/Contact.hpp"
+#include "hf/Fault.hpp"
 #include "hf/Joint.hpp"
 #include "hf/Types.hpp"
 #include "hf/Version.hpp"

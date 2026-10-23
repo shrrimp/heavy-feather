@@ -211,6 +211,22 @@ namespace hf {
         std::vector<ContactData> contactScratch;
         WorldStats stats;
 
+        // Faults.cpp: what a faulted island is put back to, and what the host is told.
+        struct DriveSave {
+            std::uint32_t joint = 0;
+            JointSlot slot;
+        };
+        struct FaultSite {
+            int island = -1;
+            int group = -1; // the offending group, whose first body the fault names; -1: named already
+        };
+        std::vector<DriveSave> driveSaves; // the stepped machines' joints, as the step began
+        std::vector<Fault> faults;         // this step's, and where each was found
+        std::vector<FaultSite> faultSites;
+        std::vector<std::uint8_t> islandFaulted;
+        std::vector<int> bodyOfGroup, islandBodies;
+        int rejected = 0; // calls refused since the last step
+
         std::uint64_t stepCount = 0;
         bool reshapedAny = false;
         std::vector<SleepLink> sleepLinks;
@@ -258,6 +274,21 @@ namespace hf {
         void solveContactPositions();
         void restitution();
         void storeContacts();
+
+        // Faults.cpp
+        template <typename T>
+        T reject(T refused) {
+            ++rejected;
+            return refused;
+        }
+        void beginFaults(); // before beginDrives: what a fault puts back
+        void afterPhase(FaultPhase phase, int substep);
+        void checkFaults(FaultPhase phase); // a fault in each island that has a NaN, or at the end a body too fast
+        void rollBack();                    // the faulted islands, as the step found them
+        bool faulted(const Group &g) const {
+            return g.island >= 0 && std::size_t(g.island) < islandFaulted.size() &&
+                   islandFaulted[std::size_t(g.island)];
+        }
 
         // Sleep.cpp
         void beginSleep(); // who is stepped: the awake, and what they reach

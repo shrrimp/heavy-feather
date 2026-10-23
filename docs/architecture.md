@@ -30,6 +30,11 @@ mass of everything attached to it.
 - **Sleep**: a body still for a few steps falls asleep and stops being stepped, until a push, an
   edit or an awake neighbour wakes it. A machine sleeps whole. What is stepped splits into
   islands, the bodies touching or jointed to each other.
+- **Faults**: a row only writes into the moving bodies of its own island, never into the ground
+  or a sleeper it touches, so a NaN born in an island stays there. Once the step is done the world
+  looks for one: an island that has one, or a body faster than the host allows, is put back as the
+  step found it, at rest, and the host is told. Bad input never gets that far: a call given a
+  value the world can't use refuses it.
 
 Heavy Feather does no collision detection. The host finds contacts with its own, hands them
 over, steps the world, and reads the poses back.

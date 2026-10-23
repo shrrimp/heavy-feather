@@ -217,8 +217,10 @@ namespace hf {
             if (unitOf[g] < 0 || gr.frozen) continue;
             const std::size_t u = std::size_t(unitOf[g]);
             unitStepped[u] = 1;
+            // Put back after a fault, it is at rest, but not still: it stays awake to try again.
             const double spin = length(gr.w) * gr.radius;
-            if (dot(gr.v, gr.v) >= kStillSpeed2 || spin * spin >= kStillSpin2 || gr.correction >= kStillCorrection)
+            if (dot(gr.v, gr.v) >= kStillSpeed2 || spin * spin >= kStillSpin2 || gr.correction >= kStillCorrection ||
+                faulted(gr))
                 unitStill[u] = 0;
         }
         for (std::size_t mi = 0; mi < machines.size(); ++mi) {

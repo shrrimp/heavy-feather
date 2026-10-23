@@ -91,6 +91,7 @@ namespace hf {
 
         for (MachineData &md : machines)
             if (stepped(md)) readState(md);
+        beginFaults();
         beginDrives(dt);
         beginContacts();
 
@@ -112,27 +113,34 @@ namespace hf {
             updateTurned();
             for (MachineData &md : machines)
                 if (stepped(md)) solveInternal(md);
+            afterPhase(FaultPhase::Internal, i);
 
             prepareContacts();
             prepareSprings();
             solveContacts();
+            afterPhase(FaultPhase::Contacts, i);
             for (MachineData &md : machines)
                 if (stepped(md)) afterContacts(md);
+            afterPhase(FaultPhase::AfterContacts, i);
 
             for (MachineData &md : machines)
                 if (stepped(md)) solvePositions(md);
+            afterPhase(FaultPhase::Positions, i);
             solveContactPositions();
             for (Group &g : groups)
                 if (rigid(g)) clampCorrection(g, h, settings.maxCorrection);
+            afterPhase(FaultPhase::ContactPositions, i);
 
             for (MachineData &md : machines)
                 if (stepped(md)) integrate(md);
             for (Group &g : groups)
                 if (rigid(g)) integrateRigid(g, h);
+            afterPhase(FaultPhase::Integrate, i);
 
             relaxContacts();
             for (MachineData &md : machines)
                 if (stepped(md)) writeVelocities(md);
+            afterPhase(FaultPhase::Relax, i);
         }
 
         for (JointSlot &j : joints)
@@ -140,11 +148,19 @@ namespace hf {
         restitution();
         for (MachineData &md : machines)
             if (stepped(md)) writeVelocities(md);
+        afterPhase(FaultPhase::Restitution, n);
+
+        // Nothing has read this step's state yet: an island gone wrong is put back before anything does.
+        checkFaults(FaultPhase::EndOfStep);
+        if (!faults.empty()) rollBack();
         storeContacts();
         carriedRows.clear();
         endSleep();
 
         stats = WorldStats{};
+        stats.faults = int(faults.size());
+        stats.rejected = rejected;
+        rejected = 0;
         stats.contacts = int(prep.size());
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
@@ -156,11 +172,12 @@ namespace hf {
             stats.lcpPivots += md.m.stats.lcpPivots;
             stats.lcpFallbacks += md.m.stats.lcpFallbacks;
         }
-        for (const BodySlot &b : bodies) {
+        for (BodySlot &b : bodies) {
             if (!b.alive) continue;
             const Group &g = groups[std::size_t(b.group)];
-            stats.stepped += !g.isStatic && !g.frozen;
+            stats.stepped += moves(g);
             stats.asleep += b.asleep;
+            if (moves(g) && !faulted(g)) b.faultStreak = 0;
         }
         stats.islands = islands;
     }
