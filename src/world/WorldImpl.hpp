@@ -158,6 +158,36 @@ namespace hf {
         ContactBlock blocks[2];
     };
 
+    // RigidRows.cpp: what a rigid island's contact rows push. A body that moves this step gets its own slot, and
+    // anything else they touch (the ground, a sleeper, a kinematic body) a slot that is only ever read.
+    struct SolverBody {
+        Vec3 v{}, w{}, pv{}, pw{};
+        Mat3 invI{}; // world, as the step began; zero for a body that doesn't move
+        double invMass = 0.0;
+        int group = 0;
+        bool moves = false;
+    };
+
+    // A contact in a rigid island, lean: built once a step, its lever arms and masses held for the step, only its
+    // depth refreshed each sub-step. Its impulses live here until the step is done.
+    struct RigidRow {
+        int contact = 0;
+        int a = 0, b = 0; // solver bodies
+        Vec3 n{}, t1{}, t2{}, r1{}, r2{};
+        double kn = 0.0, kt1 = 0.0, kt2 = 0.0;
+        double friction = 0.0;
+        double ln = 0.0, lt1 = 0.0, lt2 = 0.0, lnMax = 0.0, refLn = 0.0;
+        double vtarget = 0.0, posBias = 0.0, pseudo = 0.0, massCoeff = 1.0, impulseCoeff = 0.0;
+        int turn = -1;           // into rigidTurns, when it resists rolling or spin
+        std::uint8_t active = 0; // swept this sub-step: touching, or a gap it can reach
+    };
+
+    struct RigidTurn {
+        double kr1 = 0.0, kr2 = 0.0, ks = 0.0;
+        double lr1 = 0.0, lr2 = 0.0, ls = 0.0;
+        double rolling = 0.0, spinning = 0.0;
+    };
+
     // Sleep.cpp: a link between two dynamic groups, through the host's contacts or a joint, for the flood.
     struct SleepLink {
         int a = 0, b = 0;
@@ -259,6 +289,10 @@ namespace hf {
         std::vector<std::uint8_t> machineIsland;
         std::vector<int> impactRows; // the rows taking an impact this sub-step, island by island (impactStart)
         std::vector<int> impactStart;
+        std::vector<SolverBody> solverBodies;
+        std::vector<RigidRow> rigidRows; // island by island (rigidStart)
+        std::vector<RigidTurn> rigidTurns;
+        std::vector<int> rigidStart, slotOfGroup;
         int rowsOfKind[2] = {0, 0}; // rigid, machine
         std::vector<std::uint8_t> seeded, reached, unitStepped, unitStill, unitAsleep, unitVetoed;
 
@@ -301,6 +335,17 @@ namespace hf {
         void solveContactPositions();
         void restitution();
         void storeContacts();
+
+        // RigidRows.cpp
+        void beginRigidRows();             // once a step, after beginContacts
+        void prepareRigidRows();           // each sub-step, before the sweeps
+        void solveRigidIsland(int island); // its velocity sweeps
+        void rigidPositions(int island);
+        void relaxRigidIsland(int island);
+        void rigidVelocitiesOut(); // the sweeps' answers, back into the groups
+        void rigidPositionsOut();
+        void rigidRestitution();
+        void endRigidRows(); // the impulses, back into the contacts
 
         // Faults.cpp
         template <typename T>

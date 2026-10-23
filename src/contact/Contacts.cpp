@@ -143,6 +143,7 @@ namespace hf {
         for (MachineData &md : machines) md.contacts.clear();
         for (std::size_t i = 0; i < contacts.size(); ++i)
             if (contacts[i].machine >= 0) machines[std::size_t(contacts[i].machine)].contacts.push_back(int(i));
+        beginRigidRows();
     }
 
     // The warm start for the next step. Only this step's contacts are kept, so the cache can't grow.
@@ -201,22 +202,19 @@ namespace hf {
         for (std::vector<LinkRun> &r : runs) r.assign(machines.size(), LinkRun{});
         for (std::size_t ci = 0; ci < contacts.size(); ++ci) {
             ContactData &c = contacts[ci];
-            if (c.machine >= 0) continue;
+            // A rigid island's rows are lean ones, made once a step: see RigidRows.cpp.
+            if (c.machine >= 0 || !machineIsland[std::size_t(c.island)]) continue;
             Group &a = groups[std::size_t(c.ga)], &b = groups[std::size_t(c.gb)];
             c.depth = contactDepth(c);
-            if (c.impact > 0) --c.impact;
 
             // A gap is speculative: a rigid row that lets the pair close it within the sub-step and no faster, so a
             // fast body stops on a surface instead of passing through it. One the pair isn't closing fast enough to
             // reach this sub-step, with room to spare, could only solve to zero: the next sub-step looks again.
             const bool gap = c.depth < 0.0;
-            const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
-            const double approach = -dot(vb - va, c.n);
-            if (gap && c.lnMax <= 0.0 && approach * h * kGapReach < -c.depth) continue;
-            // An impact: one sweep of a few corners can't share out the impulse that stops it, nor take it back once
-            // the next sub-step warm-starts with it, so its rows are swept as a machine's are, this sub-step and the
-            // next. Resting, nothing approaches faster than gravity gives it in a sub-step.
-            if (approach > kRestitutionMinSpeed) c.impact = 2;
+            if (gap && c.lnMax <= 0.0) {
+                const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
+                if (-dot(vb - va, c.n) * h * kGapReach < -c.depth) continue;
+            }
 
             ContactPrep p;
             p.contact = int(ci);
@@ -287,18 +285,8 @@ namespace hf {
         rowStart.assign(L + 1, 0);
         for (const ContactPrep &p : prep) ++rowStart[std::size_t(contacts[std::size_t(p.contact)].island) + 1];
         for (std::size_t i = 1; i <= L; ++i) rowStart[i] += rowStart[i - 1];
-        rowsOfKind[0] = rowsOfKind[1] = 0;
-        for (std::size_t i = 0; i < L; ++i) rowsOfKind[machineIsland[i]] += rowStart[i + 1] - rowStart[i];
-        // A rigid island's rows taking an impact, in its own order.
-        impactStart.assign(L + 1, 0);
-        impactRows.clear();
-        for (std::size_t i = 0; i < L; ++i) {
-            impactStart[i] = int(impactRows.size());
-            if (machineIsland[i]) continue;
-            for (int r = rowStart[i]; r < rowStart[i + 1]; ++r)
-                if (contacts[std::size_t(prep[std::size_t(r)].contact)].impact > 0) impactRows.push_back(r);
-        }
-        impactStart[L] = int(impactRows.size());
+        rowsOfKind[1] = int(prep.size());
+        prepareRigidRows();
     }
 
     namespace {
@@ -419,25 +407,6 @@ namespace hf {
                     I.machineIsland[island] != 0};
         }
 
-        // A rigid island's impact rows, once the whole island has had its own sweeps: as many again as a machine
-        // island's, re-anchoring each outer pass as the solve does.
-        void sweepImpacts(World::Impl &I, std::size_t island, int iterations, bool relax) {
-            const int *rows = I.impactRows.data() + I.impactStart[island];
-            const int count = I.impactStart[island + 1] - I.impactStart[island];
-            if (count == 0 || iterations <= 0) return;
-            const int outer = relax ? 1 : std::min(kProximalOuter, iterations);
-            const int inner = std::max(1, iterations / outer);
-            for (int o = 0; o < outer; ++o) {
-                if (!relax)
-                    for (int r = 0; r < count; ++r) {
-                        ContactPrep &p = I.prep[std::size_t(rows[r])];
-                        p.refLn = I.contacts[std::size_t(p.contact)].ln;
-                    }
-                for (int k = 0; k < inner; ++k)
-                    for (int r = 0; r < count; ++r) sweepContact(I, I.prep[std::size_t(rows[r])], relax);
-            }
-        }
-
     } // namespace
 
     void World::Impl::prepareSprings() {
@@ -535,9 +504,13 @@ namespace hf {
     void World::Impl::solveContacts() {
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
             const IslandPart part = partOf(*this, island);
+            if (!part.machine) {
+                solveRigidIsland(int(island));
+                continue;
+            }
             if (part.rowBegin == part.rowEnd && part.springBegin == part.springEnd && part.machineCount == 0) continue;
             const int *island_machines = machineOrder.data() + part.machineBegin;
-            const int iterations = std::max(1, part.machine ? settings.contactIterations : settings.rigidIterations);
+            const int iterations = std::max(1, settings.contactIterations);
             const int outer = std::min(kProximalOuter, iterations);
             const int inner = std::max(1, iterations / outer);
             for (int o = 0; o < outer; ++o) {
@@ -551,8 +524,8 @@ namespace hf {
                     sweepBounded(*this, island_machines, part.machineCount);
                 }
             }
-            if (!part.machine) sweepImpacts(*this, island, std::max(1, settings.contactIterations), false);
         }
+        rigidVelocitiesOut();
     }
 
     // After the integration, and nothing is integrated from it: drains the separating velocity the bias added, and
@@ -566,22 +539,28 @@ namespace hf {
         }
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
             const IslandPart part = partOf(*this, island);
+            if (!part.machine) {
+                relaxRigidIsland(int(island));
+                continue;
+            }
             const int *island_machines = machineOrder.data() + part.machineBegin;
-            const int iterations = part.machine ? kRelaxIterations : std::max(0, settings.rigidRelaxIterations);
-            for (int k = 0; k < iterations; ++k) {
+            for (int k = 0; k < kRelaxIterations; ++k) {
                 for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], true);
                 flushRuns(*this, false, island_machines, part.machineCount);
                 sweepBounded(*this, island_machines, part.machineCount);
             }
-            if (!part.machine) sweepImpacts(*this, island, kRelaxIterations, true);
         }
+        rigidVelocitiesOut();
     }
 
     void World::Impl::solveContactPositions() {
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
             const IslandPart part = partOf(*this, island);
-            const int iterations = part.machine ? kPositionIterations : std::max(0, settings.rigidPositionIterations);
-            for (int k = 0; k < iterations; ++k)
+            if (!part.machine) {
+                rigidPositions(int(island));
+                continue;
+            }
+            for (int k = 0; k < kPositionIterations; ++k)
                 for (int r = part.rowBegin; r < part.rowEnd; ++r) {
                     ContactPrep &p = prep[std::size_t(r)];
                     if (p.posBias == 0.0) continue;
@@ -603,6 +582,7 @@ namespace hf {
                 }
         }
         flushRuns(*this, true);
+        rigidPositionsOut();
     }
 
     // Once per step, after every sub-step: a bounce is a property of the impact, solved against the speed the pair
@@ -627,6 +607,8 @@ namespace hf {
                         continue;
                     md.m.pushRow(c.row, -c.in.restitution * c.vnImpact);
                 }
+        rigidRestitution();
+        endRigidRows();
     }
 
 } // namespace hf

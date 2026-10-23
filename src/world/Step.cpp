@@ -200,7 +200,7 @@ namespace hf {
         rejected = groupRebuilds = machineRebuilds = 0;
         stats.rigidRows = rowsOfKind[0];
         stats.machineRows = rowsOfKind[1];
-        stats.contacts = int(prep.size());
+        stats.contacts = int(prep.size()) + rowsOfKind[0];
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
             stats.links += int(md.groupOfLink.size());

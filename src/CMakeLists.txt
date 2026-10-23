@@ -12,6 +12,7 @@ set(HF_SOURCES
   contact/Contacts.cpp
   contact/DirectContacts.cpp
   contact/MachineSides.cpp
+  contact/RigidRows.cpp
   dynamics/Articulation.cpp
   math/Dense.cpp
   solver/BoxLcp.cpp
