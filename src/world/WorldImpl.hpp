@@ -117,6 +117,9 @@ namespace hf {
         double kr1 = 0.0, kr2 = 0.0, ks = 0.0;
         SoftParams soft;
         double vtarget = 0.0, refLn = 0.0, posBias = 0.0, pseudo = 0.0;
+        // Which ends the sweeps write: a moving rigid group. A static, sleeping or machine end is only read, so
+        // nothing a row computes ever lands in a group that another island reads.
+        bool writeA = false, writeB = false;
         int ns = 0;
         MachineSide sides[2];
     };
@@ -136,6 +139,7 @@ namespace hf {
         Vec3 n{}, r1{}, r2{}, imR1n{}, imR2n{};
         double imA = 0.0, imB = 0.0;
         double k = 0.0, gamma = 0.0, target = 0.0, lambda = 0.0;
+        bool writeA = false, writeB = false; // as a contact's
         int nb = 0;
         ContactBlock blocks[2];
     };

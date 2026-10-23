@@ -215,7 +215,8 @@ namespace hf {
         b->desc.angularVelocity = angularVelocity;
         if (b->group < 0) return;
         Group &g = impl_->groups[std::size_t(b->group)];
-        if (g.isStatic) return;
+        // A sleeper keeps no velocity: a host writing back what it read leaves it still.
+        if (g.isStatic || b->asleep) return;
         g.w = angularVelocity;
         g.v = velocity - cross(angularVelocity, g.q * b->offset);
     }

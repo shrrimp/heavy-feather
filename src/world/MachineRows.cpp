@@ -473,7 +473,7 @@ namespace hf {
                 if (j.lever != 0.0) {
                     d.target = std::clamp(d.target + j.lever * d.speed * dt, d.min, d.max);
                     j.commanded = true;
-                } else if (j.leverPrev != 0.0) {
+                } else if (j.leverPrev != 0.0 && std::isfinite(j.position)) {
                     d.target = std::clamp(j.position, d.min, d.max);
                     j.targetFrom = j.targetTo = j.targetEff = d.target;
                     j.commanded = true;

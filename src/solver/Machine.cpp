@@ -395,20 +395,23 @@ namespace hf {
                 const std::size_t j = std::size_t(bIdx_[b + 1]);
                 const double r1 = residual(b), r2 = residual(b + 1);
                 const double a = bK_[b], c = bK12_[b], d = bK_[b + 1], det = a * d - c * c;
-                double l1 = lambda_[i] - r1 / a, l2 = lambda_[j] - r2 / d;
+                // A row with no mobility takes nothing: its impulse would be a division by zero.
+                double l1 = a > 0.0 ? lambda_[i] - r1 / a : lambda_[i], l2 = d > 0.0 ? lambda_[j] - r2 / d : lambda_[j];
                 if (det > 1e-12 * a * d) {
                     l1 = lambda_[i] - (d * r1 - c * r2) / det;
                     l2 = lambda_[j] - (a * r2 - c * r1) / det;
                 }
                 const double len = std::hypot(l1, l2);
-                if (len > cap) {
-                    l1 *= cap / len;
-                    l2 *= cap / len;
+                if (!(len <= cap)) {
+                    const double s = std::isfinite(len) && len > 0.0 ? cap / len : 0.0;
+                    l1 *= s;
+                    l2 *= s;
                 }
                 apply(b, l1);
                 apply(++b, l2);
                 continue;
             }
+            if (!(bK_[b] > 0.0)) continue;
             const double lo = r.follows >= 0 ? -cap : r.lo, hi = r.follows >= 0 ? cap : r.hi;
             apply(b, std::clamp(lambda_[i] - residual(b) / bK_[b], lo, hi));
         }

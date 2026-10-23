@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <vector>
 
 #include "world/WorldImpl.hpp"
 
@@ -12,19 +14,35 @@ namespace hf {
         // The spin's own torque, ω × Iω, at the step's midpoint: I(ω' − ω) + h ω_m × Iω_m = 0 in the body frame,
         // solved by Newton. The midpoint keeps a free body's energy and angular momentum; taken at the start, a thin
         // body spinning near its long axis gains energy every step until it explodes, and left out it never precesses.
+        //
+        // A Newton step with no inverse, or none worth trusting, leaves the spin as it was for the sub-step.
         void gyroscopic(Group &g, double h) {
             const Mat3 R = toMat3(g.q);
             const Mat3 &I = g.inertiaBody;
             const Vec3 w = transpose(R) * g.w;
+            const double tiny = 1e-12 * std::fabs(determinant(I));
             Vec3 next = w;
             for (int k = 0; k < 2; ++k) {
                 const Vec3 m = 0.5 * (w + next), Im = I * m;
                 const Vec3 f = I * (next - w) + h * cross(m, Im);
                 const Mat3 J = I + 0.5 * h * (skew(m) * I - skew(Im));
+                const double det = determinant(J);
+                if (!std::isfinite(det) || !(std::fabs(det) > tiny)) return;
                 next = next - inverse(J) * f;
             }
             g.w = R * next;
         }
+
+#ifndef NDEBUG
+        // What doesn't move this step is only ever read: a row that wrote into it would carry its numbers, a NaN
+        // among them, to every island that touches it.
+        void checkStill(const std::vector<Group> &groups) {
+            for (const Group &g : groups) {
+                if (moves(g)) continue;
+                assert(g.v == Vec3{} && g.w == Vec3{} && g.pv == Vec3{} && g.pw == Vec3{});
+            }
+        }
+#endif
 
         void integrateRigid(Group &g, double h) {
             g.correction = (length(g.pv) + length(g.pw) * g.radius) * h;
@@ -77,6 +95,9 @@ namespace hf {
         beginContacts();
 
         for (int i = 0; i < n; ++i) {
+#ifndef NDEBUG
+            checkStill(groups);
+#endif
             // At the top of sub-step i a moving target is i/n of the way along.
             const double alpha = double(i) / double(n);
             for (JointSlot &j : joints)

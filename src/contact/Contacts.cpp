@@ -124,8 +124,8 @@ namespace hf {
         // Angular impulses about t1, t2 (rolling) and n (spin) on both ends.
         void applyTurn(World::Impl &I, const ContactPrep &p, double l1, double l2, double ls) {
             Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
-            a.w -= l1 * p.imAr1 + l2 * p.imAr2 + ls * p.imAs;
-            b.w += l1 * p.imBr1 + l2 * p.imBr2 + ls * p.imBs;
+            if (p.writeA) a.w -= l1 * p.imAr1 + l2 * p.imAr2 + ls * p.imAs;
+            if (p.writeB) b.w += l1 * p.imBr1 + l2 * p.imBr2 + ls * p.imBs;
             const double l[6] = {0.0, 0.0, 0.0, l1, l2, ls};
             machineImpulse(I, p, false, 6, l);
         }
@@ -182,10 +182,13 @@ namespace hf {
             p.contact = int(ci);
             p.a = c.ga;
             p.b = c.gb;
-            a.pv = a.pw = b.pv = b.pw = Vec3{};
 
             // A machine end's mass is its whole linkage's, through W: its rigid terms are zero.
             const bool rigidA = moves(a) && machineOf(a) < 0, rigidB = moves(b) && machineOf(b) < 0;
+            p.writeA = rigidA;
+            p.writeB = rigidB;
+            if (rigidA) a.pv = a.pw = Vec3{};
+            if (rigidB) b.pv = b.pw = Vec3{};
             if (!rigidA && !rigidB && machineOf(a) < 0 && machineOf(b) < 0) continue;
             p.imA = rigidA ? a.invMass : 0.0;
             p.imB = rigidB ? b.invMass : 0.0;
@@ -260,15 +263,19 @@ namespace hf {
 
         void apply(World::Impl &I, const ContactPrep &p, const ContactData &c, double ln, double lt1, double lt2) {
             Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
-            a.v -= p.imA * ln * c.n;
-            a.w -= ln * p.imR1cn;
-            b.v += p.imB * ln * c.n;
-            b.w += ln * p.imR2cn;
             const Vec3 Pt = lt1 * p.t1 + lt2 * p.t2;
-            a.v -= p.imA * Pt;
-            a.w -= lt1 * p.imR1ct1 + lt2 * p.imR1ct2;
-            b.v += p.imB * Pt;
-            b.w += lt1 * p.imR2ct1 + lt2 * p.imR2ct2;
+            if (p.writeA) {
+                a.v -= p.imA * ln * c.n;
+                a.w -= ln * p.imR1cn;
+                a.v -= p.imA * Pt;
+                a.w -= lt1 * p.imR1ct1 + lt2 * p.imR1ct2;
+            }
+            if (p.writeB) {
+                b.v += p.imB * ln * c.n;
+                b.w += ln * p.imR2cn;
+                b.v += p.imB * Pt;
+                b.w += lt1 * p.imR2ct1 + lt2 * p.imR2ct2;
+            }
             const double l[3] = {ln, lt1, lt2};
             machineImpulse(I, p, false, 3, l);
         }
@@ -288,10 +295,12 @@ namespace hf {
             }
             lt1 += d1;
             lt2 += d2;
+            // Outside the cone, back onto its rim; not a number at all, nothing.
             const double len = std::sqrt(lt1 * lt1 + lt2 * lt2);
-            if (len > maxT) {
-                lt1 *= maxT / len;
-                lt2 *= maxT / len;
+            if (!(len <= maxT)) {
+                const double s = std::isfinite(len) && len > 0.0 ? maxT / len : 0.0;
+                lt1 *= s;
+                lt2 *= s;
             }
         }
 
@@ -301,9 +310,10 @@ namespace hf {
             const Vec3 w = turnVelocity(I, p, c);
             double l1 = p.kr1 > 0.0 ? c.lr1 - w.x / p.kr1 : 0.0, l2 = p.kr2 > 0.0 ? c.lr2 - w.y / p.kr2 : 0.0;
             const double maxR = c.in.rolling * ln, len = std::sqrt(l1 * l1 + l2 * l2);
-            if (len > maxR) {
-                l1 = len > 0.0 ? l1 * maxR / len : 0.0;
-                l2 = len > 0.0 ? l2 * maxR / len : 0.0;
+            if (!(len <= maxR)) {
+                const bool onRim = std::isfinite(len) && len > 0.0;
+                l1 = onRim ? l1 * maxR / len : 0.0;
+                l2 = onRim ? l2 * maxR / len : 0.0;
             }
             const double maxS = c.in.spinning * ln;
             const double ls = p.ks > 0.0 ? std::clamp(c.ls - w.z / p.ks, -maxS, maxS) : 0.0;
@@ -358,6 +368,8 @@ namespace hf {
             sp.imR1n = (rigidA ? a.invInertiaWorld() : Mat3{}) * cross(sp.r1, sp.n);
             sp.imR2n = (rigidB ? b.invInertiaWorld() : Mat3{}) * cross(sp.r2, sp.n);
             sp.k = sp.imA + sp.imB + dot(cross(sp.r1, sp.n), sp.imR1n) + dot(cross(sp.r2, sp.n), sp.imR2n);
+            sp.writeA = rigidA;
+            sp.writeB = rigidB;
 
             if (!moves(a) && !moves(b)) continue;
             for (int mi : {machineOf(a), machineOf(b)}) {
@@ -374,6 +386,9 @@ namespace hf {
                 sp.blocks[sp.nb++] = blk;
             }
             springRow(sp.k, d.hertz, d.damping, len - d.restLength, h, sp.gamma, sp.target);
+            // Neither end can move along it: between two machines anchored on their hinge axes, say. It can do
+            // nothing, and its row would be 0/0.
+            if (!(sp.k + sp.gamma > 0.0)) continue;
             springs.push_back(sp);
         }
     }
@@ -392,10 +407,14 @@ namespace hf {
             }
             const double dl = (sp.target - v - sp.gamma * sp.lambda) / (sp.k + sp.gamma);
             sp.lambda += dl;
-            a.v += sp.imA * dl * sp.n;
-            a.w += dl * sp.imR1n;
-            b.v -= sp.imB * dl * sp.n;
-            b.w -= dl * sp.imR2n;
+            if (sp.writeA) {
+                a.v += sp.imA * dl * sp.n;
+                a.w += dl * sp.imR1n;
+            }
+            if (sp.writeB) {
+                b.v -= sp.imB * dl * sp.n;
+                b.w -= dl * sp.imR2n;
+            }
             for (int k = 0; k < sp.nb; ++k) {
                 const ContactBlock &blk = sp.blocks[k];
                 I.machines[std::size_t(blk.machine)].m.applyContact(I.arena.data() + blk.off + std::size_t(blk.n), dl);
@@ -448,10 +467,14 @@ namespace hf {
                 const double app = nl - p.pseudo;
                 p.pseudo = nl;
                 Group &a = groups[std::size_t(p.a)], &b = groups[std::size_t(p.b)];
-                a.pv -= p.imA * app * c.n;
-                a.pw -= app * p.imR1cn;
-                b.pv += p.imB * app * c.n;
-                b.pw += app * p.imR2cn;
+                if (p.writeA) {
+                    a.pv -= p.imA * app * c.n;
+                    a.pw -= app * p.imR1cn;
+                }
+                if (p.writeB) {
+                    b.pv += p.imB * app * c.n;
+                    b.pw += app * p.imR2cn;
+                }
                 machineImpulse(*this, p, true, 1, &app);
             }
         flushRuns(*this, true);
