@@ -20,6 +20,7 @@ target_link_libraries(hf-test-host PUBLIC hf_objects PRIVATE hf_warnings)
 set(HF_TEST_SOURCES
   ArticulationTests.cpp
   BoxLcpTests.cpp
+  CenterOfMassTests.cpp
   DenseTests.cpp
   DriveTests.cpp
   EditTests.cpp

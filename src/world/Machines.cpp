@@ -73,7 +73,7 @@ namespace hf {
             const BodySlot &b = I.bodies[body.index];
             e.group = b.group;
             e.isStatic = I.groups[std::size_t(b.group)].isStatic;
-            e.anchor = b.offset + b.rot * f.position;
+            e.anchor = b.offset + b.rot * (f.position - b.desc.centerOfMass);
             e.frame = normalize(b.rot * f.rotation);
             return e;
         }

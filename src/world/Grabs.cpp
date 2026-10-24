@@ -62,12 +62,12 @@ namespace hf {
         g.alive = true;
         g.desc = desc;
         g.body = id;
-        g.local = local;
+        g.local = local - b->desc.centerOfMass; // kept from the centre of mass, as the world works
         // Held where it is until the host says where to.
         Vec3 c, v, w;
         Quat q;
         I.bodyState(*b, c, q, v, w);
-        g.target = c + q * local;
+        g.target = c + q * g.local;
         g.targetRot = q;
         wakeUp(*b);
         return {index, generation};

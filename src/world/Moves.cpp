@@ -190,8 +190,10 @@ namespace hf {
 
     BodyState World::state(BodyId id) const {
         BodyState s;
-        if (const BodySlot *b = impl_->body(id))
+        if (const BodySlot *b = impl_->body(id)) {
             impl_->bodyState(*b, s.position, s.orientation, s.velocity, s.angularVelocity);
+            s.position -= s.orientation * b->desc.centerOfMass;
+        }
         return s;
     }
 
@@ -211,16 +213,17 @@ namespace hf {
         Quat q;
         I.bodyState(*b, c, q, v, w);
         const Quat to = normalize(orientation);
+        const Vec3 centre = position + to * b->desc.centerOfMass;
         if (g.machine >= 0) {
             MachineData &md = I.machines[std::size_t(g.machine)];
             // Anchored, it can only go where its anchor went, and an anchor moved carries it there already.
-            if (!md.anchors.empty() || md.anchored) return identity(c, q, position, to);
+            if (!md.anchors.empty() || md.anchored) return identity(c, q, centre, to);
             I.markMachine(g.machine, I.groupMark);
         } else {
             I.groupMark.assign(I.groups.size(), 0);
             I.groupMark[std::size_t(b->group)] = 1;
         }
-        I.moveGroups(I.groupMark, c, q, position, to);
+        I.moveGroups(I.groupMark, c, q, centre, to);
         return true;
     }
 

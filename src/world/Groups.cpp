@@ -39,7 +39,7 @@ namespace hf {
         std::vector<std::uint8_t> placed(n, 0), rooted(n, 0);
         const auto place = [&](BodySlot &b, const Frame &onB, const Vec3 &at, const Quat &q) {
             b.desc.orientation = normalize(q * conjugate(onB.rotation));
-            b.desc.position = at - b.desc.orientation * onB.position;
+            b.desc.position = at - b.desc.orientation * (onB.position - b.desc.centerOfMass);
         };
         for (const JointSlot &j : joints) {
             if (!j.alive || j.desc.type != JointType::Fixed || (j.desc.a.valid() && j.desc.b.valid())) continue;
@@ -65,7 +65,8 @@ namespace hf {
                 const BodySlot &from = bodies[fromA ? a : b];
                 const Frame &f = fromA ? j.desc.frameA : j.desc.frameB;
                 place(bodies[fromA ? b : a], fromA ? j.desc.frameB : j.desc.frameA,
-                      from.desc.position + from.desc.orientation * f.position, from.desc.orientation * f.rotation);
+                      from.desc.position + from.desc.orientation * (f.position - from.desc.centerOfMass),
+                      from.desc.orientation * f.rotation);
                 placed[fromA ? b : a] = 1;
                 changed = true;
             }
@@ -143,6 +144,68 @@ namespace hf {
         const BodySlot *b = body(id);
         if (b && b->group > 0 && groups[std::size_t(b->group)].machine >= 0)
             touchedMachines.push_back(groups[std::size_t(b->group)].machine);
+    }
+
+    // The centre of mass moved within the body, its origin where it was. Inside the world the body is placed by its
+    // centre, so the centre moves, and everything measured from it, joints' ends and grabs, shifts back to stay put.
+    void World::Impl::moveCenterOfMass(BodySlot &b, const Vec3 &centerOfMass) {
+        Vec3 c, v, w;
+        Quat q;
+        bodyState(b, c, q, v, w);
+        const Vec3 shift = centerOfMass - b.desc.centerOfMass, moved = q * shift;
+        b.desc.centerOfMass = centerOfMass;
+        b.desc.position = c + moved;
+        b.desc.velocity = v + cross(w, moved);
+        const BodyId id{std::uint32_t(&b - bodies.data()), b.generation};
+        for (GrabSlot &g : grabs)
+            if (g.alive && g.body == id) g.local -= shift;
+        if (dirty || b.group < 0 || groups[std::size_t(b.group)].members > 1) {
+            // A weld group's centre is all its bodies': rebuilt, from the body as it is now.
+            b.poseWritten = b.velocityWritten = true;
+            noteWritten(b);
+            dirty = true;
+            return;
+        }
+        const int gi = b.group;
+        Group &g = groups[std::size_t(gi)];
+        g.c += moved;
+        g.c0 = g.c;
+        if (!g.isStatic) g.v += cross(g.w, moved);
+        const Vec3 inGroup = b.rot * shift;
+        const auto shiftEnd = [&](End &e) {
+            if (e.group == gi) e.anchor -= inGroup;
+        };
+        for (JointRef &r : looseSprings) {
+            shiftEnd(r.A);
+            shiftEnd(r.B);
+        }
+        for (MachineData &md : machines) {
+            for (JointRef &r : md.joints) {
+                shiftEnd(r.A);
+                shiftEnd(r.B);
+            }
+            Articulation &art = md.m.art;
+            for (std::size_t l = 0; l < art.links.size(); ++l) {
+                Link &L = art.links[l];
+                // This link's own end of its joint, and its children's ends on it, both measured from its centre.
+                if (md.groupOfLink[l] == gi) {
+                    L.pc -= inGroup;
+                    L.c = g.c;
+                }
+                if (L.parent >= 0 && md.groupOfLink[std::size_t(L.parent)] == gi) L.pp -= inGroup;
+            }
+            // Rooted on it, as on the ground: its root ends shift, and its pose as an anchor is where it now is.
+            for (Anchor &a : md.anchors) {
+                if (a.group != gi) continue;
+                if (a.link >= 0) {
+                    Link &L = art.links[std::size_t(a.link)];
+                    L.pp -= inGroup;
+                    L.anchorPos = g.c;
+                } else {
+                    a.c = g.c;
+                }
+            }
+        }
     }
 
     void World::Impl::bodyMassChanged(BodySlot &b) {

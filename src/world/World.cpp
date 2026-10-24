@@ -53,7 +53,7 @@ namespace hf {
 
         bool usable(const BodyDesc &d) {
             return finite(d.position) && rotation(d.orientation) && finite(d.velocity) && finite(d.angularVelocity) &&
-                   std::isfinite(d.radius) && massProperties(d.isStatic, d.mass, d.inertia);
+                   finite(d.centerOfMass) && std::isfinite(d.radius) && massProperties(d.isStatic, d.mass, d.inertia);
         }
 
         // At or above zero, and a number; infinite only where infinite means no limit.
@@ -145,8 +145,10 @@ namespace hf {
         fresh.listed = b.listed;
         fresh.forced = b.forced;
         b = fresh;
+        // Inside the world a body is placed by its centre of mass: the origin is only how the host sees it.
         b.desc = desc;
         b.desc.orientation = normalize(desc.orientation);
+        b.desc.position = desc.position + b.desc.orientation * desc.centerOfMass;
         b.alive = true;
         // A body alone is a group of its own, made in place: nothing else is rebuilt for it.
         if (!I.dirty) I.addGroup(b);
@@ -202,6 +204,15 @@ namespace hf {
         Vec3 c, v, w;
         Quat q;
         impl_->bodyState(*b, c, q, v, w);
+        return c - q * b->desc.centerOfMass;
+    }
+
+    Vec3 World::centerOfMass(BodyId id) const {
+        const BodySlot *b = impl_->body(id);
+        if (!b) return {};
+        Vec3 c, v, w;
+        Quat q;
+        impl_->bodyState(*b, c, q, v, w);
         return c;
     }
 
@@ -233,11 +244,17 @@ namespace hf {
     }
 
     bool World::setMassProperties(BodyId id, double mass, const Mat3 &inertia) {
+        const BodySlot *b = impl_->body(id);
+        return b && setMassProperties(id, mass, inertia, b->desc.centerOfMass);
+    }
+
+    bool World::setMassProperties(BodyId id, double mass, const Mat3 &inertia, const Vec3 &centerOfMass) {
         BodySlot *b = impl_->body(id);
         if (!b) return false;
-        if (!massProperties(b->desc.isStatic, mass, inertia)) return impl_->reject(false);
+        if (!massProperties(b->desc.isStatic, mass, inertia) || !finite(centerOfMass)) return impl_->reject(false);
         b->desc.mass = mass;
         b->desc.inertia = inertia;
+        if (centerOfMass != b->desc.centerOfMass) impl_->moveCenterOfMass(*b, centerOfMass);
         impl_->bodyMassChanged(*b);
         wakeUp(b);
         impl_->wakePartners(id);
@@ -258,6 +275,7 @@ namespace hf {
         if (!b) return false;
         if (!finite(position) || !rotation(orientation)) return I.reject(false);
         const Quat qb = normalize(orientation);
+        const Vec3 centre = position + qb * b->desc.centerOfMass;
         // A host writing back the pose it read isn't a push: only a real move wakes it.
         const bool moves =
             length(position - this->position(id)) > 1e-9 || std::fabs(dot(qb, this->orientation(id))) < 1.0 - 1e-12;
@@ -267,19 +285,19 @@ namespace hf {
         }
         I.noteWritten(*b);
         if (b->kinematic) {
-            b->targetPosition = position;
+            b->targetPosition = centre;
             b->targetOrientation = qb;
             b->hasTarget = true;
             return true;
         }
-        b->desc.position = position;
+        b->desc.position = centre;
         b->desc.orientation = qb;
         b->poseWritten = true;
         b->teleported = b->teleported || moves;
         if (b->group < 0) return true;
         Group &g = I.groups[std::size_t(b->group)];
         g.q = normalize(qb * conjugate(b->rot));
-        g.c = position - g.q * b->offset;
+        g.c = centre - g.q * b->offset;
         if (g.isStatic && moves) I.carryAnchoredOn(b->group);
         return true;
     }
@@ -309,7 +327,7 @@ namespace hf {
         if (!finite(force) || !finite(point)) return impl_->reject(false);
         if (force != Vec3{}) wakeUp(b);
         b->force += force;
-        b->torque += cross(point - position(id), force);
+        b->torque += cross(point - centerOfMass(id), force);
         if (!b->forced) {
             b->forced = true;
             impl_->forced.push_back(id.index);
@@ -435,7 +453,7 @@ namespace hf {
             Vec3 c, v, w;
             Quat qb;
             bodyState(*b, c, qb, v, w);
-            p = c + qb * f.position;
+            p = c + qb * (f.position - b->desc.centerOfMass);
             q = qb * f.rotation;
         };
         Vec3 pA, pB;

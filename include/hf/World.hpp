@@ -85,7 +85,8 @@ namespace hf {
         void removeBody(BodyId body);
         bool contains(BodyId body) const;
 
-        Vec3 position(BodyId body) const; // of the centre of mass
+        Vec3 position(BodyId body) const;     // of the origin
+        Vec3 centerOfMass(BodyId body) const; // world
         Quat orientation(BodyId body) const;
         Vec3 velocity(BodyId body) const;
         Vec3 angularVelocity(BodyId body) const;
@@ -113,6 +114,9 @@ namespace hf {
         bool kinematic(BodyId body) const;
         // New mass and inertia (about the centre of mass, body axes), as an edit changes them; the body carries on.
         bool setMassProperties(BodyId body, double mass, const Mat3 &inertia);
+        // And a centre of mass moved within the body, its origin where it was: its joints, its machine's drives and
+        // whatever holds onto it carry on, nothing rebuilt for a body alone in its group.
+        bool setMassProperties(BodyId body, double mass, const Mat3 &inertia, const Vec3 &centerOfMass);
         // A static body doesn't move and isn't pushed: one pinned in place.
         void setStatic(BodyId body, bool isStatic);
         // A body still for long enough falls asleep, and isn't stepped until a push, an edit or an awake neighbour
@@ -151,7 +155,7 @@ namespace hf {
         double driveForce(JointId joint) const;    // over the last sub-step, N or N·m
         JointInfo jointInfo(JointId joint) const;
 
-        // A grab of a body at a point in its own axes, from its centre of mass: the mouse's hand on it. It keeps the
+        // A grab of a body at a point in its own axes, from its origin: the mouse's hand on it. It keeps the
         // body awake until released. Refused: a cap or a frequency negative or NaN, a point not finite.
         GrabId grab(BodyId body, const Vec3 &localPoint, const GrabDesc &desc);
         // Where the grabbed point is pulled to; with an orientation, and a torque cap, where the body is turned to.

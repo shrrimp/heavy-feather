@@ -341,6 +341,7 @@ namespace hf {
         void touchJoint(const JointDesc &d);
         void touchJointsOf(BodyId body);   // its joints' machines: it joins or leaves one
         void bodyMassChanged(BodySlot &b); // in place for a body alone in its group, else a rebuild
+        void moveCenterOfMass(BodySlot &b, const Vec3 &centerOfMass); // its origin where it was
         template <typename Find>
         void placeWelds(Find &find);
         void bodyState(const BodySlot &b, Vec3 &c, Quat &q, Vec3 &v, Vec3 &w) const;

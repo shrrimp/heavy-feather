@@ -32,7 +32,7 @@ namespace hf {
         bool operator==(const GrabId &) const = default;
     };
 
-    // A frame on a body, relative to its centre of mass in body axes. A joint's axis is its frame's X.
+    // A frame on a body, from its origin in body axes. A joint's axis is its frame's X.
     struct Frame {
         Vec3 position{};
         Quat rotation{};

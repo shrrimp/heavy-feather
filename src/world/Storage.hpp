@@ -60,7 +60,7 @@ namespace hf {
     struct GrabSlot {
         GrabDesc desc;
         BodyId body;
-        Vec3 local{}; // from the body's centre of mass, in its axes
+        Vec3 local{}; // from the body's centre of mass, in its axes: the host's point less its centre's
         Vec3 target{};
         Quat targetRot{};
         bool turns = false; // pulled toward targetRot too
