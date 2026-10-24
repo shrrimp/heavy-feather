@@ -64,6 +64,12 @@ namespace hf {
             art.massDiagonal(diagM_);
         }
 
+        // What the machine rides on jumped since its velocities were measured: the joints take the impulse.
+        if (art.anchorJumps(tmp_)) {
+            solveMass(tmp_.data());
+            for (std::size_t i = 0; i < n; ++i) art.qdot[i] -= tmp_[i];
+        }
+
         // The velocity terms at the sub-step's midpoint velocity, found by a few fixed-point passes: taken at the start
         // (explicit), a thin link spinning about its own axis gains energy every step until it explodes.
         const std::vector<double> &qd0 = art.qdot;

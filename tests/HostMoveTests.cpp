@@ -349,3 +349,64 @@ TEST_CASE("only a tree joint of one coordinate can be set by hand") {
     REQUIRE(!w.jointInfo(cut).tree);
     CHECK_MESSAGE(!w.setJointPosition(cut, 0.1), "a loop's cut isn't a coordinate at all");
 }
+
+namespace {
+
+    // A pendulum hinged under a kinematic platform the host drives along x: v0 to start, a after.
+    struct Carried {
+        World w;
+        BodyId platform, bob;
+        JointId pin;
+
+        Carried() {
+            BodyDesc p;
+            p.position = Vec3{0, 3.5, 0};
+            p.mass = 100.0;
+            p.inertia = boxInertia(100.0, Vec3{1.0, 0.5, 1.0});
+            platform = w.addBody(p);
+            w.setKinematic(platform, true);
+            bob = rodBetween(w, Vec3{0, 3, 0}, Vec3{0, 1, 0}, 5.0);
+            pin = w.addJoint(jointAt(w, JointType::Hinge, platform, bob, Vec3{0, 3, 0}, kZ));
+        }
+        void drive(double v) {
+            w.setPose(platform, w.position(platform) + Vec3{v * kDt, 0, 0}, w.orientation(platform));
+            w.step(kDt);
+        }
+    };
+
+} // namespace
+
+TEST_CASE("a pendulum under a kinematic platform brought gently to speed rides along with it") {
+    // A quarter metre per second squared leans it 1.5 degrees: brought to 1 m/s that way, it swings no further than
+    // twice that, and is carried at the platform's speed, not moved a step at a time.
+    Carried c;
+    double v = 0.0, worst = 0.0;
+    for (int i = 0; i < 240; ++i) {
+        v = std::min(1.0, v + 0.25 * kDt);
+        c.drive(v);
+        worst = std::max(worst, std::fabs(c.w.jointPosition(c.pin)));
+    }
+    for (int i = 0; i < 60; ++i) {
+        c.drive(1.0);
+        worst = std::max(worst, std::fabs(c.w.jointPosition(c.pin)));
+    }
+    CHECK_MESSAGE(worst < 2.0 * std::atan(0.25 / 9.81) + 1e-3, "it never swung further than the ramp leans it");
+    CHECK_MESSAGE(std::fabs(c.w.velocity(c.bob).x - 1.0) < 0.05, "and is carried at the platform's speed");
+}
+
+TEST_CASE("a pendulum under a kinematic platform speeding up swings back") {
+    Carried c;
+    const double a = 2.0;
+    double v = 0.0, most = 0.0;
+    for (int i = 0; i < 120; ++i) {
+        v += a * kDt;
+        c.drive(v);
+        const double behind = c.w.position(c.bob).x - c.w.position(c.platform).x;
+        most = std::min(most, behind);
+    }
+    // Swinging from straight down about the lean atan(a/g), it reaches twice that: about 23 degrees, a 0.4 m lag of a
+    // centre a metre below the pin.
+    const double lean = std::atan(a / 9.81);
+    CHECK_MESSAGE(most < -0.9 * std::sin(2.0 * lean), "it swung back as far as an accelerating frame throws it");
+    CHECK_MESSAGE(most > -1.1 * std::sin(2.0 * lean), "and no further");
+}

@@ -491,6 +491,13 @@ namespace hf {
     // back, and written back so the first contact refresh sees the pose the solver will.
     void World::Impl::readState(MachineData &md) {
         followAnchors(md);
+        // A kinematic anchor's pose as it is, its motion as the links' velocities were measured against.
+        for (const Anchor &a : md.anchors) {
+            if (a.link < 0 || !groups[std::size_t(a.group)].kinematic) continue;
+            Link &L = md.m.art.links[std::size_t(a.link)];
+            L.anchorPos = groups[std::size_t(a.group)].c;
+            L.anchorRot = groups[std::size_t(a.group)].q;
+        }
         const std::size_t n = md.groupOfLink.size();
         md.c.resize(n);
         md.R.resize(n);
@@ -505,6 +512,17 @@ namespace hf {
         }
         md.m.art.setFromMaximal(md.c, md.R, md.v, md.w);
         writePoses(md);
+        // Its motion now: whatever changed since is a jump the joints take at the first dynamics.
+        for (const Anchor &a : md.anchors) {
+            if (a.link < 0) continue;
+            const Group &g = groups[std::size_t(a.group)];
+            Link &L = md.m.art.links[std::size_t(a.link)];
+            const Vec3 v = g.kinematic ? g.v : Vec3{}, w = g.kinematic ? g.w : Vec3{};
+            L.anchorJumpV = v - L.anchorV;
+            L.anchorJumpW = w - L.anchorW;
+            L.anchorV = v;
+            L.anchorW = w;
+        }
     }
 
 } // namespace hf

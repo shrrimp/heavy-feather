@@ -27,6 +27,11 @@ namespace hf {
         Quat Qp{}, Qc{};
         Vec3 anchorPos{};
         Quat anchorRot{};
+        // The anchor's motion, when what it is anchored on moves: its velocity at anchorPos, and its spin. A root
+        // link rides on it, as a child rides on its parent. A change in it since the links' velocities were measured
+        // is a jump, taken as an impulse through the joints at the next dynamics.
+        Vec3 anchorV{}, anchorW{};
+        Vec3 anchorJumpV{}, anchorJumpW{};
 
         double mass = 0.0;
         Mat3 inertiaBody{}; // about the centre of mass, body axes
@@ -80,6 +85,9 @@ namespace hf {
 
         // C in M qddot + C = tau + Jᵀλ, with gravity g and per-link wrenches about O (RNEA). fext may be empty.
         void biasForces(const Vec3 &g, const std::vector<Force> &fext, std::vector<double> &C);
+        // The joint impulses the roots' anchor jumps ask for, the joints held still: M Δqdot = -tau. Clears the
+        // jumps; false when there are none. Needs updateKinematics.
+        bool anchorJumps(std::vector<double> &tau);
 
         // M's diagonal alone, from the composite inertias. Needs updateKinematics.
         void massDiagonal(std::vector<double> &d) const;
@@ -112,6 +120,9 @@ namespace hf {
 
     private:
         int ndof_ = 0;
+
+        // A root link's anchor twist about O: what it rides on, moving at a constant twist through the sub-step.
+        Motion anchorTwist(const Link &L) const;
 
         // One link's share of the factorisation: U = IA S and D⁻¹ = (Sᵀ IA S)⁻¹, k columns for k dofs.
         struct Factor {

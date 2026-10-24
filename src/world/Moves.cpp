@@ -92,7 +92,8 @@ namespace hf {
             Quat *q;
             held(a, c, q);
             const Group &g = groups[std::size_t(a.group)];
-            if (g.c == *c && g.q == *q) continue;
+            // A kinematic anchor isn't followed by a jump: the machine rides on it through the step.
+            if (g.kinematic || (g.c == *c && g.q == *q)) continue;
             // The first anchor that moved carries the machine; any other closes on it through the position pass.
             markMachine(int(&md - machines.data()), groupMark);
             moveGroups(groupMark, *c, *q, g.c, g.q);
@@ -106,6 +107,22 @@ namespace hf {
             return true;
         }
         return false;
+    }
+
+    void World::Impl::liveAnchors(MachineData &md) {
+        for (Anchor &a : md.anchors) {
+            if (a.link < 0) continue;
+            const Group &g = groups[std::size_t(a.group)];
+            Link &L = md.m.art.links[std::size_t(a.link)];
+            if (!g.kinematic) {
+                L.anchorV = L.anchorW = Vec3{};
+                continue;
+            }
+            L.anchorPos = g.c;
+            L.anchorRot = g.q;
+            L.anchorV = g.v;
+            L.anchorW = g.w;
+        }
     }
 
     void World::Impl::carryAnchoredOn(int group) {

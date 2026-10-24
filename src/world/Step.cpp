@@ -138,13 +138,18 @@ namespace hf {
         afterPhase(FaultPhase::ContactPositions, i);
         laps.lap(profile.positions);
 
-        if (machinesPass)
-            for (int mi : steppedMachines) integrate(machines[std::size_t(mi)]);
+        // What is kinematic first: a machine anchored on it is placed from where it is at the sub-step's end.
         for (int gi : mine) {
             Group &g = groups[std::size_t(gi)];
             if (rigid(g)) integrateRigid(g, h);
             else if (g.kinematic) moveKinematic(g, double(i + 1) * h, i == n - 1);
         }
+        if (machinesPass)
+            for (int mi : steppedMachines) {
+                MachineData &md = machines[std::size_t(mi)];
+                liveAnchors(md);
+                integrate(md);
+            }
         afterPhase(FaultPhase::Integrate, i);
         laps.lap(profile.integrate);
 

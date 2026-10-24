@@ -45,6 +45,11 @@ namespace hf {
         qdot.assign(std::size_t(ndof_), 0.0);
     }
 
+    Motion Articulation::anchorTwist(const Link &L) const {
+        if (L.parent >= 0 || L.kind == JointKind::Free) return Motion{};
+        return Motion{L.anchorW, L.anchorV + cross(L.anchorW, O - L.anchorPos)};
+    }
+
     void Articulation::parentPose(int i, Vec3 &c, Quat &R) const {
         const Link &L = links[std::size_t(i)];
         if (L.parent >= 0) {
@@ -100,6 +105,8 @@ namespace hf {
             } else {
                 cP = L.anchorPos;
                 RP = L.anchorRot;
+                vP = L.anchorV;
+                wP = L.anchorW;
             }
             const Quat RPf = RP * L.Qp;
             const Quat Rcf = links[i].R * L.Qc;
@@ -203,7 +210,9 @@ namespace hf {
 
     void Articulation::updateVelocities(const double *qd) {
         for (Link &L : links) {
-            const Motion Vp = L.parent >= 0 ? links[std::size_t(L.parent)].V : Motion{};
+            // An anchor moving at a constant twist has no spatial acceleration: its spin's effects come from riding on
+            // its twist, in the velocity products below.
+            const Motion Vp = L.parent >= 0 ? links[std::size_t(L.parent)].V : anchorTwist(L);
             const Motion Ap = L.parent >= 0 ? links[std::size_t(L.parent)].A : Motion{};
             Motion vj{};
             for (int k = 0; k < L.ndof; ++k) vj += qd[L.dof0 + k] * L.S[k];
@@ -232,6 +241,32 @@ namespace hf {
                 }
             }
         }
+    }
+
+    bool Articulation::anchorJumps(std::vector<double> &tau) {
+        acc_.resize(links.size());
+        bool any = false;
+        for (std::size_t i = 0; i < links.size(); ++i) {
+            Link &L = links[i];
+            if (L.parent >= 0) {
+                acc_[i] = acc_[std::size_t(L.parent)];
+                continue;
+            }
+            acc_[i] = Motion{};
+            if (L.kind == JointKind::Free || (L.anchorJumpV == Vec3{} && L.anchorJumpW == Vec3{})) continue;
+            acc_[i] = Motion{L.anchorJumpW, L.anchorJumpV + cross(L.anchorJumpW, O - L.anchorPos)};
+            L.anchorJumpV = L.anchorJumpW = Vec3{};
+            any = true;
+        }
+        if (!any) return false;
+        tau.assign(std::size_t(ndof_), 0.0);
+        for (std::size_t i = 0; i < links.size(); ++i) links[i].F = links[i].I * acc_[i];
+        for (std::size_t i = links.size(); i-- > 0;) {
+            Link &L = links[i];
+            for (int a = 0; a < L.ndof; ++a) tau[std::size_t(L.dof0 + a)] = dot(L.S[a], L.F);
+            if (L.parent >= 0) links[std::size_t(L.parent)].F += L.F;
+        }
+        return true;
     }
 
     void Articulation::biasForces(const Vec3 &g, const std::vector<Force> &fext, std::vector<double> &C) {
@@ -392,18 +427,20 @@ namespace hf {
 
     Motion Articulation::twistOf(int link, const double *qd) const {
         Motion V{};
+        int root = link;
         for (int j = link; j >= 0; j = links[std::size_t(j)].parent) {
             const Link &L = links[std::size_t(j)];
             for (int k = 0; k < L.ndof; ++k) V += qd[L.dof0 + k] * L.S[k];
+            root = j;
         }
-        return V;
+        return V + anchorTwist(links[std::size_t(root)]);
     }
 
     void Articulation::twists(const double *qd, std::vector<Motion> &V) const {
         V.resize(links.size());
         for (std::size_t i = 0; i < links.size(); ++i) {
             const Link &L = links[i];
-            Motion t = L.parent >= 0 ? V[std::size_t(L.parent)] : Motion{};
+            Motion t = L.parent >= 0 ? V[std::size_t(L.parent)] : anchorTwist(L);
             for (int k = 0; k < L.ndof; ++k) t += qd[L.dof0 + k] * L.S[k];
             V[i] = t;
         }
