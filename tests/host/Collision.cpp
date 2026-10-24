@@ -197,7 +197,7 @@ namespace host {
             const int u = (incAxis + 1) % 3, v = (incAxis + 2) % 3;
             const Vec3 fc = ip.c + incSign * is.half[incAxis] * axis(ip, incAxis);
             Polygon poly;
-            for (const auto [su, sv] : {std::pair{1.0, 1.0}, {-1.0, 1.0}, {-1.0, -1.0}, {1.0, -1.0}})
+            for (const auto &[su, sv] : {std::pair{1.0, 1.0}, {-1.0, 1.0}, {-1.0, -1.0}, {1.0, -1.0}})
                 poly.p[poly.n++] = fc + su * is.half[u] * axis(ip, u) + sv * is.half[v] * axis(ip, v);
             for (int k = 1; k < 3; ++k) {
                 const int t = (ri + k) % 3;

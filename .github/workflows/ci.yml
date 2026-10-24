@@ -24,7 +24,9 @@ jobs:
       - run: cmake --preset ${{ matrix.preset }} -DHF_WARNINGS_AS_ERRORS=ON
       - run: cmake --build --preset ${{ matrix.preset }}
       - run: ctest --preset ${{ matrix.preset }}
+      # An asan library needs a host built with the sanitizer; release and shared check the package.
       - name: Package check (install, then build a host against it)
+        if: matrix.preset != 'asan'
         run: |
           cmake --install build/${{ matrix.preset }} --prefix "$RUNNER_TEMP/hf"
           cmake -S tests/package -B build/package -G Ninja -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/hf"
