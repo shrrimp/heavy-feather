@@ -37,6 +37,15 @@ namespace hf {
         double restLength = 0.0;           // Spring
     };
 
+    // A hand on a body: its point pulled softly toward a target, and with a torque cap, the body turned toward an
+    // orientation, never harder than the caps. On a machine link the whole linkage follows, within its joints.
+    struct GrabDesc {
+        double maxForce = 0.0;  // N
+        double maxTorque = 0.0; // N m; 0: a point grab, its rotation free
+        double hertz = 5.0;
+        double damping = 1.0;
+    };
+
     // Where a joint ended up once the world built its machines.
     struct JointInfo {
         int machine = -1;       // -1: a weld, or a joint between two static bodies

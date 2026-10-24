@@ -332,6 +332,12 @@ namespace hf {
                 faulted(gr))
                 unitStill[u] = 0;
         }
+        // A grabbed body is held by the host's hand: never still enough to sleep.
+        for (const GrabSlot &s : grabs) {
+            const BodySlot *b = s.alive ? body(s.body) : nullptr;
+            if (b && b->group >= 0 && unitOf[std::size_t(b->group)] >= 0)
+                unitStill[std::size_t(unitOf[std::size_t(b->group)])] = 0;
+        }
         for (std::size_t mi = 0; mi < machines.size(); ++mi) {
             const MachineData &md = machines[mi];
             bool working = md.correction >= kStillCorrection;

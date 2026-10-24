@@ -18,6 +18,7 @@ set(HF_SOURCES
   solver/BoxLcp.cpp
   solver/Machine.cpp
   world/Faults.cpp
+  world/Grabs.cpp
   world/Groups.cpp
   world/MachineRows.cpp
   world/Machines.cpp

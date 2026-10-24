@@ -364,6 +364,39 @@ namespace hf {
 
     } // namespace
 
+    // The grabs on a machine's links: soft rows against the world, bounded as a capped drive is, so the linkage follows
+    // within its joints and loops and pulls no harder than the cap. Along the world's axes, and about them when the
+    // grab turns its link; a box of caps, which is what the machine's solve can bound.
+    void World::Impl::grabRows(MachineData &md) {
+        Machine &m = md.m;
+        const int machine = int(&md - machines.data());
+        for (std::size_t gi = 0; gi < grabs.size(); ++gi) {
+            const GrabSlot &s = grabs[gi];
+            const BodySlot *b = s.alive ? body(s.body) : nullptr;
+            if (!b || b->group < 0 || groups[std::size_t(b->group)].machine != machine) continue;
+            const Group &g = groups[std::size_t(b->group)];
+            const Vec3 at = g.c + g.q * (b->offset + b->rot * s.local), error = at - s.target;
+            const bool turns = s.turns && s.desc.maxTorque > 0.0;
+            const Vec3 turn = turns ? rotationVectorOf(s.targetRot * conjugate(normalize(g.q * b->rot))) : Vec3{};
+            for (int k = 0; k < (turns ? 6 : 3); ++k) {
+                const Vec3 axis = k % 3 == 0 ? kX : k % 3 == 1 ? kY : kZ;
+                std::vector<double> &J = md.row;
+                J.assign(std::size_t(m.dofs()), 0.0);
+                if (k < 3) m.art.addPointRow(g.link, at, axis, 1.0, J.data());
+                else m.art.addAngularRow(g.link, axis, 1.0, J.data());
+                MachineRow row;
+                const double cap = (k < 3 ? s.desc.maxForce : s.desc.maxTorque) * h;
+                row.lo = -cap;
+                row.hi = cap;
+                springRow(m.inverseMassAlong(J.data()), s.desc.hertz, s.desc.damping, k < 3 ? error[k] : -turn[k - 3],
+                          h, row.compliance, row.target);
+                md.velTags.push_back((std::uint64_t(1) << 62) | (std::uint64_t(gi) << 8) | std::uint64_t(k));
+                double *dst = m.addRow(row);
+                std::copy(J.begin(), J.end(), dst);
+            }
+        }
+    }
+
     void World::Impl::solveInternal(MachineData &md) {
         Machine &m = md.m;
         const Vec3 O = m.art.links[0].c;
@@ -377,6 +410,7 @@ namespace hf {
         md.driveRow.assign(md.joints.size(), -1);
         RowBuilder rb{*this, md, RowBuilder::Mode::Velocity};
         addJointRows(rb);
+        grabRows(md);
         contactRows(md);
         m.prepareRows();
         warmRows(*this, md.lastVel, md.velState, md.velTags);

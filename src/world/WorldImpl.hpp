@@ -190,6 +190,16 @@ namespace hf {
         double rolling = 0.0, spinning = 0.0;
     };
 
+    // A grab on a free body this sub-step: soft rows along the world's axes, then about them, swept with the contacts,
+    // each set held within its cap together.
+    struct GrabPrep {
+        int grab = 0, group = 0, island = 0;
+        Vec3 r{}; // the grabbed point from the group's centre
+        double k[6] = {}, gamma[6] = {}, target[6] = {}, lambda[6] = {};
+        bool turns = false;
+        Mat3 invIw{};
+    };
+
     // Sleep.cpp: a link between two dynamic groups, through the host's contacts or a joint, for the flood.
     struct SleepLink {
         int a = 0, b = 0;
@@ -236,7 +246,9 @@ namespace hf {
         WorldSettings settings;
         std::vector<BodySlot> bodies;
         std::vector<JointSlot> joints;
-        std::vector<std::uint32_t> freeBodies, freeJoints;
+        std::vector<GrabSlot> grabs;
+        std::vector<GrabPrep> grabPreps;
+        std::vector<std::uint32_t> freeBodies, freeJoints, freeGrabs;
         std::vector<Group> groups; // 0: the world
         std::vector<MachineData> machines;
         std::vector<JointRef> looseSprings; // springs not inside one machine, solved in the contact sweep
@@ -340,6 +352,7 @@ namespace hf {
         void beginDrives(double dt);
         void beginDrive(JointSlot &j, double dt);
         void solveInternal(MachineData &md);
+        void grabRows(MachineData &md);
         void afterContacts(MachineData &md);
         void solvePositions(MachineData &md);
         void integrate(MachineData &md);
@@ -353,6 +366,8 @@ namespace hf {
         void updateTurned();
         void prepareContacts();
         void prepareSprings();
+        void prepareGrabs();
+        void sweepGrabs(int island);
         void solveContacts();
         void relaxContacts();
         void solveContactPositions();

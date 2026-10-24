@@ -154,6 +154,7 @@ namespace hf {
 
             prepareContacts();
             prepareSprings();
+            prepareGrabs();
             solveContacts();
             afterPhase(FaultPhase::Contacts, i);
             for (MachineData &md : machines)

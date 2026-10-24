@@ -158,6 +158,12 @@ namespace hf {
         for (const JointRef &r : looseSprings)
             for (int g : {r.A.group, r.B.group})
                 if (moves(groups[std::size_t(g)])) machineIsland[std::size_t(groups[std::size_t(g)].island)] = 1;
+        // A grabbed free body is swept with its contacts as a loose spring is.
+        for (const GrabSlot &s : grabs) {
+            const BodySlot *b = s.alive ? body(s.body) : nullptr;
+            if (b && b->group >= 0 && moves(groups[std::size_t(b->group)]))
+                machineIsland[std::size_t(groups[std::size_t(b->group)].island)] = 1;
+        }
         rowStart.assign(L + 1, 0);
         for (ContactData &c : contacts) {
             const Group &a = groups[std::size_t(c.ga)];
@@ -578,7 +584,6 @@ namespace hf {
                 solveRigidIsland(int(island));
                 continue;
             }
-            if (part.rowBegin == part.rowEnd && part.springBegin == part.springEnd && part.machineCount == 0) continue;
             const int *island_machines = machineOrder.data() + part.machineBegin;
             const int iterations = std::max(1, settings.contactIterations);
             const int outer = std::min(kProximalOuter, iterations);
@@ -589,6 +594,7 @@ namespace hf {
                 for (int k = 0; k < inner; ++k) {
                     for (int s = part.springBegin; s < part.springEnd; ++s)
                         sweepSpring(*this, springs[std::size_t(springOrder[std::size_t(s)])]);
+                    if (!grabPreps.empty()) sweepGrabs(int(island));
                     for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], false);
                     flushRuns(*this, false, island_machines, part.machineCount);
                     sweepBounded(*this, island_machines, part.machineCount);

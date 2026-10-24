@@ -57,6 +57,17 @@ namespace hf {
         bool locked = false, latchPending = true, commanded = true;
     };
 
+    struct GrabSlot {
+        GrabDesc desc;
+        BodyId body;
+        Vec3 local{}; // from the body's centre of mass, in its axes
+        Vec3 target{};
+        Quat targetRot{};
+        bool turns = false; // pulled toward targetRot too
+        std::uint32_t generation = 0;
+        bool alive = false;
+    };
+
     // A piston or a servo: a drive toward a position, with a valve.
     inline bool positionDrive(JointType t) { return t == JointType::Piston || t == JointType::Servo; }
     // m or rad: within this of its target a position drive only nudges itself back; beyond, it travels at its speed.

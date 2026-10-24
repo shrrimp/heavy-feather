@@ -147,6 +147,13 @@ namespace hf {
         double driveForce(JointId joint) const;    // over the last sub-step, N or N·m
         JointInfo jointInfo(JointId joint) const;
 
+        // A grab of a body at a point in its own axes, from its centre of mass: the mouse's hand on it. It keeps the
+        // body awake until released. Refused: a cap or a frequency negative or NaN, a point not finite.
+        GrabId grab(BodyId body, const Vec3 &localPoint, const GrabDesc &desc);
+        // Where the grabbed point is pulled to; with an orientation, and a torque cap, where the body is turned to.
+        bool setGrabTarget(GrabId grab, const Vec3 &point, const Quat *orientation = nullptr);
+        void release(GrabId grab);
+
         // The contacts for the next step. They are refreshed from their body-local points every sub-step, so the
         // host only detects once per step.
         void clearContacts();

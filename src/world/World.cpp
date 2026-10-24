@@ -162,6 +162,8 @@ namespace hf {
             const JointSlot &j = I.joints[k];
             if (j.alive && (j.desc.a == id || j.desc.b == id)) removeJoint({k, j.generation});
         }
+        for (std::uint32_t k = 0; k < I.grabs.size(); ++k)
+            if (I.grabs[k].alive && I.grabs[k].body == id) release({k, I.grabs[k].generation});
         // Alone in its group, the group goes with it; its machine, if it was one alone, is rebuilt without it.
         const int g = b->group;
         if (!I.dirty && g > 0 && I.groups[std::size_t(g)].members <= 1) {
