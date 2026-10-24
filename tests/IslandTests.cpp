@@ -1,4 +1,5 @@
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -82,4 +83,30 @@ TEST_CASE("a step's profile is off unless asked for, and adds up when it is") {
     CHECK_MESSAGE(std::fabs(p.begin + p.machines + p.contacts + p.positions + p.integrate + p.relax + p.end - p.total) <
                       1e-9,
                   "and its phases add up to it");
+}
+
+TEST_CASE("rigid islands can take fewer sub-steps than the machines beside them") {
+    const auto build = [](int rigidSubsteps, BodyId &box, BodyId &bob) {
+        WorldSettings s;
+        s.rigidSubsteps = rigidSubsteps;
+        auto w = std::make_unique<World>(s);
+        BodyDesc d;
+        d.position = Vec3{5, 10, 0};
+        box = w->addBody(d);
+        bob = rodBetween(*w, Vec3{0, 3, 0}, Vec3{1, 3, 0}, 2.0);
+        w->addJoint(jointAt(*w, JointType::Hinge, BodyId{}, bob, Vec3{0, 3, 0}, Vec3{0, 0, 1}));
+        return w;
+    };
+    BodyId box4, bob4, box16, bob16;
+    auto four = build(4, box4, bob4), sixteen = build(0, box16, bob16);
+    const int steps = 30;
+    for (int i = 0; i < steps; ++i) {
+        four->step(kDt);
+        sixteen->step(kDt);
+    }
+    // Semi-implicit Euler at a quarter step: after N sub-steps of h, y drops g h² N (N + 1) / 2.
+    const double h = kDt / 4, N = 4.0 * steps;
+    CHECK_MESSAGE(std::fabs(four->position(box4).y - (10.0 - 9.81 * h * h * N * (N + 1) / 2)) < 1e-9,
+                  "the free box falls on four sub-steps a step");
+    CHECK_MESSAGE((four->position(bob4) == sixteen->position(bob16)), "the pendulum beside it on sixteen, bit for bit");
 }

@@ -43,6 +43,11 @@ namespace hf {
     // Once per step: the host's contacts in group frames, their warm start, and the approach speed a bounce
     // reflects, sampled before anything has touched a velocity.
     void World::Impl::beginContacts() {
+        // A pass that doesn't run this step leaves nothing of the last behind: restitution reads these rows.
+        prep.clear();
+        springs.clear();
+        grabPreps.clear();
+        rowsOfKind[0] = rowsOfKind[1] = 0;
         for (int gi : steppedGroups) {
             Group &g = groups[std::size_t(gi)];
             g.c0 = g.c;
@@ -263,7 +268,7 @@ namespace hf {
     }
 
     void World::Impl::updateTurned() {
-        for (int gi : steppedGroups) {
+        for (int gi : passGroups[pass]) {
             Group &g = groups[std::size_t(gi)];
             g.turned = rotationVectorOf(g.q * conjugate(g.q0));
         }
@@ -362,7 +367,6 @@ namespace hf {
         for (const ContactPrep &p : prep) ++rowStart[std::size_t(contacts[std::size_t(p.contact)].island) + 1];
         for (std::size_t i = 1; i <= L; ++i) rowStart[i] += rowStart[i - 1];
         rowsOfKind[1] = int(prep.size());
-        prepareRigidRows();
     }
 
     namespace {
@@ -579,11 +583,13 @@ namespace hf {
     // point. A machine's capped drives and limits are swept in the same loop as the contacts that load them.
     void World::Impl::solveContacts() {
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
-            const IslandPart part = partOf(*this, island);
-            if (!part.machine) {
+            // Each pass its own islands; a rigid island's rows are its lean ones.
+            if ((machineIsland[island] != 0) != (pass == 0)) continue;
+            if (!machineIsland[island]) {
                 solveRigidIsland(int(island));
                 continue;
             }
+            const IslandPart part = partOf(*this, island);
             const int *island_machines = machineOrder.data() + part.machineBegin;
             const int iterations = std::max(1, settings.contactIterations);
             const int outer = std::min(kProximalOuter, iterations);
@@ -601,7 +607,7 @@ namespace hf {
                 }
             }
         }
-        rigidVelocitiesOut();
+        if (pass == 1) rigidVelocitiesOut();
     }
 
     // After the integration, and nothing is integrated from it: drains the separating velocity the bias added, and
@@ -614,11 +620,13 @@ namespace hf {
             p.vtarget = std::min(0.0, contactDepth(c)) / h;
         }
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
-            const IslandPart part = partOf(*this, island);
-            if (!part.machine) {
+            // Each pass its own islands; a rigid island's rows are its lean ones.
+            if ((machineIsland[island] != 0) != (pass == 0)) continue;
+            if (!machineIsland[island]) {
                 relaxRigidIsland(int(island));
                 continue;
             }
+            const IslandPart part = partOf(*this, island);
             const int *island_machines = machineOrder.data() + part.machineBegin;
             for (int k = 0; k < kRelaxIterations; ++k) {
                 for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], true);
@@ -626,16 +634,18 @@ namespace hf {
                 sweepBounded(*this, island_machines, part.machineCount);
             }
         }
-        rigidVelocitiesOut();
+        if (pass == 1) rigidVelocitiesOut();
     }
 
     void World::Impl::solveContactPositions() {
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
-            const IslandPart part = partOf(*this, island);
-            if (!part.machine) {
+            // Each pass its own islands; a rigid island's rows are its lean ones.
+            if ((machineIsland[island] != 0) != (pass == 0)) continue;
+            if (!machineIsland[island]) {
                 rigidPositions(int(island));
                 continue;
             }
+            const IslandPart part = partOf(*this, island);
             for (int k = 0; k < kPositionIterations; ++k)
                 for (int r = part.rowBegin; r < part.rowEnd; ++r) {
                     ContactPrep &p = prep[std::size_t(r)];
@@ -658,7 +668,7 @@ namespace hf {
                 }
         }
         flushRuns(*this, true);
-        rigidPositionsOut();
+        if (pass == 1) rigidPositionsOut();
     }
 
     // Once per step, after every sub-step: a bounce is a property of the impact, solved against the speed the pair

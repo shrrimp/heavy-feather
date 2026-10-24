@@ -308,8 +308,11 @@ namespace hf {
         std::vector<Touch> touches, touchScratch;
         std::vector<int> linkStart, linkOf, floodDepth, floodQueue, unitOf, unitSteps, islandOf;
         int islands = 0;
-        // This step's moving and kinematic groups, and its stepped machines: what a sub-step loops over.
-        std::vector<int> steppedGroups, steppedMachines;
+        // This step's moving and kinematic groups, and its stepped machines: what a sub-step loops over. A step is two
+        // passes, each of its own sub-steps: the machine islands', then the rigid islands'. Each loops over its own
+        // groups, the kinematic ones in both.
+        std::vector<int> steppedGroups, steppedMachines, passGroups[2];
+        int pass = 0;                      // 0: the machine islands', 1: the rigid islands'
         std::vector<std::uint32_t> forced; // bodies with a force or torque for the next step
         // Contacts.cpp: per island, its rows (in prep), its springs and its machines, and whether it holds a machine.
         std::vector<int> rowStart, springStart, springOrder, machineStart, machineOrder, heads;
@@ -363,7 +366,7 @@ namespace hf {
         void contactPositionRows(MachineData &md); // and their position rows
         void recordContacts(MachineData &md);      // their answers, back into the contacts
         double contactDepth(const ContactData &c) const; // refreshed from the poses, after updateTurned
-        void updateTurned();
+        void updateTurned();                             // this pass's groups
         void prepareContacts();
         void prepareSprings();
         void prepareGrabs();
@@ -422,6 +425,8 @@ namespace hf {
         void wakePartners(BodyId id); // whatever it touched lately
 
         void step(double dt);
+        template <typename Laps>
+        void subStep(int i, int n, Laps &laps, StepProfile &profile);
     };
 
 } // namespace hf

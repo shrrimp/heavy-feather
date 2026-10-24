@@ -23,6 +23,10 @@ namespace hf {
         // An island of rigid bodies alone: its velocity sweeps, the relaxing sweeps after integrating, and the
         // position sweeps, per sub-step. Sub-steps do the converging there; a pile pays for each sweep in every row.
         int rigidIterations = 1, rigidRelaxIterations = 1, rigidPositionIterations = 2;
+        // Sub-steps an island of rigid bodies alone is stepped in, apart from the machines' substeps; 0: as many.
+        // Fewer make a pile cheaper (8 steps an awake 600-body pile in two thirds of the time 16 do) but let a tall
+        // stack lean: twenty boxes stand at 16, lean at 10 and fall at 8.
+        int rigidSubsteps = 0;
         double maxCorrection = 0.05; // m: the furthest a position correction may move a body in one sub-step
         bool sleeping = true;        // still bodies stop being stepped until something wakes them
         // m/s: a body whose fastest point moves faster than this at the end of a step is a fault, like a NaN.

@@ -53,8 +53,8 @@ namespace {
     // What the world keeps this step: what it kept from the last, and what it takes in now, merged once it's done.
     std::size_t keptCount = 0;
     double keptImpulse = 0.0;
-    void readKept(World::Impl &I, int substep, FaultPhase phase) {
-        if (substep != 0 || phase != FaultPhase::Internal) return;
+    void readKept(World::Impl &I, int, FaultPhase phase) {
+        if (phase != FaultPhase::EndOfStep) return;
         keptCount = I.kept.size() + I.newlyKept.size();
         keptImpulse = 0.0;
         for (const ContactData &c : I.kept) keptImpulse += c.ln;
