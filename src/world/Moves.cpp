@@ -24,10 +24,13 @@ namespace hf {
     } // namespace
 
     void World::Impl::build() {
-        if (!dirty) return;
-        rebuildGroups();
-        buildMachines();
-        dirty = false;
+        if (dirty) {
+            rebuildGroups();
+            buildMachines();
+            dirty = false;
+        } else if (!touched.empty() || !touchedMachines.empty()) {
+            buildMachines();
+        }
     }
 
     void World::Impl::noteWritten(BodySlot &b) {
@@ -244,7 +247,7 @@ namespace hf {
         if (g.machine >= 0) return false;
 
         // A weld group moves as one, so it is kinematic as one.
-        bool isStatic = false, jointed = false;
+        bool isStatic = false;
         for (BodySlot &m : I.bodies) {
             if (!m.alive || m.group != b->group) continue;
             m.kinematic = on;
@@ -272,9 +275,8 @@ namespace hf {
         for (const JointSlot &j : I.joints) {
             if (!j.alive || j.desc.type == JointType::Fixed) continue;
             const BodySlot *a = I.body(j.desc.a), *c = I.body(j.desc.b);
-            jointed = jointed || (a && a->group == b->group) || (c && c->group == b->group);
+            if ((a && a->group == b->group) || (c && c->group == b->group)) I.touchJoint(j.desc);
         }
-        if (jointed && !g.isStatic) I.dirty = true;
         return true;
     }
 

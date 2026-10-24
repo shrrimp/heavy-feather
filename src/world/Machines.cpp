@@ -317,20 +317,70 @@ namespace hf {
 
     } // namespace
 
+    // Rebuilds the machines of the touched groups, or every machine after a full rebuild of the groups. A machine
+    // holding a touched group is taken apart, and its groups and the touched ones are put back together into
+    // machines anew; every other machine stays as it was, its rows warm.
     void World::Impl::buildMachines() {
+        const std::size_t nG = groups.size();
+        const bool all = (touched.empty() && touchedMachines.empty()) || dirty;
+        std::vector<std::uint8_t> &redo = groupMark;
+        redo.assign(nG, all ? 1 : 0);
+        machineMark.assign(machines.size(), all ? 1 : 0);
+        if (!all) {
+            for (int g : touched) {
+                if (std::size_t(g) >= nG || (g > 0 && groups[std::size_t(g)].members == 0)) continue;
+                redo[std::size_t(g)] = 1;
+                if (groups[std::size_t(g)].machine >= 0) machineMark[std::size_t(groups[std::size_t(g)].machine)] = 1;
+            }
+            for (int m : touchedMachines)
+                if (std::size_t(m) < machines.size()) machineMark[std::size_t(m)] = 1;
+            for (std::size_t mi = 0; mi < machines.size(); ++mi)
+                if (machineMark[mi])
+                    for (int g : machines[mi].groupOfLink)
+                        if (g == 0 || groups[std::size_t(g)].members > 0) redo[std::size_t(g)] = 1;
+        }
+        touched.clear();
+        touchedMachines.clear();
+
+        // What the machines taken apart had warm, for the ones built in their place.
         carriedRows.clear();
-        for (const MachineData &md : machines) {
+        for (std::size_t mi = 0; mi < machines.size(); ++mi) {
+            if (!machineMark[mi]) continue;
+            const MachineData &md = machines[mi];
             carriedRows.insert(carriedRows.end(), md.lastVel.begin(), md.lastVel.end());
             carriedRows.insert(carriedRows.end(), md.lastPos.begin(), md.lastPos.end());
         }
         std::sort(carriedRows.begin(), carriedRows.end(),
                   [](const auto &x, const auto &y) { return x.first < y.first; });
-        responses.clear(); // they name the machines about to go
-        machines.clear();
-        looseSprings.clear();
-        for (Group &g : groups) g.machine = g.link = -1;
-        for (JointSlot &j : joints) j.info = JointInfo{};
+        // The links' responses name machines by index, and the machines that stay keep their indices into them.
+        for (const LinkResponse &R : responses) machines[std::size_t(R.machine)].response[std::size_t(R.link)] = -1;
+        responses.clear();
 
+        // The machines that stay close up, in order.
+        std::vector<int> newIndex(machines.size(), -1);
+        std::size_t stay = 0;
+        for (std::size_t mi = 0; mi < machines.size(); ++mi) {
+            if (machineMark[mi]) continue;
+            newIndex[mi] = int(stay);
+            if (stay != mi) machines[stay] = std::move(machines[mi]);
+            ++stay;
+        }
+        machines.resize(stay);
+        for (std::size_t g = 0; g < nG; ++g) {
+            Group &gr = groups[g];
+            if (redo[g] || gr.machine < 0) gr.machine = gr.link = -1;
+            else gr.machine = newIndex[std::size_t(gr.machine)];
+        }
+        for (JointSlot &j : joints) {
+            if (j.info.machine < 0) continue;
+            const int m = newIndex[std::size_t(j.info.machine)];
+            if (m < 0) j.info = JointInfo{};
+            else j.info.machine = m;
+        }
+
+        // Every joint's ends; only those reaching a group being rebuilt make machines, but every spring is sorted
+        // anew between the machines and the loose ones.
+        looseSprings.clear();
         std::vector<JointRef> refs;
         for (std::uint32_t k = 0; k < joints.size(); ++k) {
             const JointSlot &j = joints[k];
@@ -340,12 +390,14 @@ namespace hf {
             r.A = endOf(*this, j.desc.a, j.desc.frameA);
             r.B = endOf(*this, j.desc.b, j.desc.frameB);
             if (r.A.group == r.B.group || (r.A.isStatic && r.B.isStatic)) continue;
+            const bool rebuilt =
+                (!r.A.isStatic && redo[std::size_t(r.A.group)]) || (!r.B.isStatic && redo[std::size_t(r.B.group)]);
+            if (!rebuilt && j.desc.type != JointType::Spring) continue;
             refs.push_back(r);
         }
 
         // Machines are components over the dynamic-dynamic kinematic joints. A static end anchors one, never merges
         // two: every machine standing on the same ground stays its own.
-        const std::size_t nG = groups.size();
         std::vector<std::size_t> uf(nG);
         std::iota(uf.begin(), uf.end(), std::size_t(0));
         std::vector<std::uint8_t> inMachine(nG, 0);
@@ -360,7 +412,7 @@ namespace hf {
         std::vector<int> machineOfRoot(nG, -1);
         std::vector<std::vector<int>> groupsOf;
         for (std::size_t g = 0; g < nG; ++g) {
-            if (!inMachine[g]) continue;
+            if (!inMachine[g] || !redo[g]) continue;
             const std::size_t root = findRoot(uf, g);
             if (machineOfRoot[root] < 0) {
                 machineOfRoot[root] = int(groupsOf.size());
@@ -368,28 +420,37 @@ namespace hf {
             }
             groupsOf[std::size_t(machineOfRoot[root])].push_back(int(g));
         }
-        const auto machineOf = [&](const End &e) {
-            return e.isStatic || !inMachine[std::size_t(e.group)] ? -1
-                                                                  : machineOfRoot[findRoot(uf, std::size_t(e.group))];
+        // An end's machine once this is done: a new one, one that stayed, or none.
+        const auto newMachine = [&](const End &e) {
+            if (e.isStatic || !redo[std::size_t(e.group)] || !inMachine[std::size_t(e.group)]) return -1;
+            return machineOfRoot[findRoot(uf, std::size_t(e.group))];
         };
+        const auto stayed = [&](const End &e) { return e.isStatic ? -1 : groups[std::size_t(e.group)].machine; };
 
         std::vector<std::vector<JointRef>> refsOf(groupsOf.size());
         for (const JointRef &r : refs) {
-            const int ma = machineOf(r.A), mb = machineOf(r.B);
-            const int mi = ma >= 0 ? ma : mb;
+            const int na = newMachine(r.A), nb = newMachine(r.B);
             if (hf::kinematic(joints[r.joint].desc.type)) {
-                refsOf[std::size_t(mi)].push_back(r);
+                refsOf[std::size_t(na >= 0 ? na : nb)].push_back(r);
                 continue;
             }
-            const bool sameMachine = (ma >= 0 && ma == mb) || (ma >= 0 && r.B.isStatic) || (mb >= 0 && r.A.isStatic);
-            if (sameMachine) refsOf[std::size_t(mi)].push_back(r);
-            else looseSprings.push_back(r);
+            // A spring inside one machine (or between it and the static world) is that machine's.
+            if ((na >= 0 && (na == nb || r.B.isStatic)) || (nb >= 0 && r.A.isStatic)) {
+                refsOf[std::size_t(na >= 0 ? na : nb)].push_back(r);
+                continue;
+            }
+            const int sa = stayed(r.A), sb = stayed(r.B);
+            if ((sa >= 0 && (sa == sb || r.B.isStatic)) || (sb >= 0 && r.A.isStatic)) continue; // a machine's own
+            looseSprings.push_back(r);
         }
 
-        machines.resize(groupsOf.size());
-        for (std::size_t mi = 0; mi < groupsOf.size(); ++mi) {
+        const std::size_t first = machines.size();
+        machines.resize(first + groupsOf.size());
+        for (std::size_t k = 0; k < groupsOf.size(); ++k) {
+            const std::size_t mi = first + k;
             MachineData &md = machines[mi];
-            buildMachine(*this, md, groupsOf[mi], refsOf[mi]);
+            md = MachineData{};
+            buildMachine(*this, md, groupsOf[k], refsOf[k]);
             for (std::size_t l = 0; l < md.groupOfLink.size(); ++l) {
                 Group &g = groups[std::size_t(md.groupOfLink[l])];
                 g.machine = int(mi);
@@ -403,7 +464,7 @@ namespace hf {
             }
             md.fext.assign(md.groupOfLink.size(), Force{});
         }
-        machineRebuilds += int(machines.size());
+        machineRebuilds += int(groupsOf.size());
     }
 
     void World::Impl::writeVelocities(MachineData &md) {

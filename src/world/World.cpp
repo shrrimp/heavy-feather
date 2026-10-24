@@ -148,7 +148,8 @@ namespace hf {
         b.desc = desc;
         b.desc.orientation = normalize(desc.orientation);
         b.alive = true;
-        I.dirty = true;
+        // A body alone is a group of its own, made in place: nothing else is rebuilt for it.
+        if (!I.dirty) I.addGroup(b);
         return {index, b.generation};
     }
 
@@ -161,11 +162,18 @@ namespace hf {
             const JointSlot &j = I.joints[k];
             if (j.alive && (j.desc.a == id || j.desc.b == id)) removeJoint({k, j.generation});
         }
+        // Alone in its group, the group goes with it; its machine, if it was one alone, is rebuilt without it.
+        const int g = b->group;
+        if (!I.dirty && g > 0 && I.groups[std::size_t(g)].members <= 1) {
+            if (I.groups[std::size_t(g)].machine >= 0) I.touchedMachines.push_back(I.groups[std::size_t(g)].machine);
+            I.freeGroup(g);
+        } else {
+            I.dirty = true;
+        }
         b->alive = false;
         ++b->generation;
         b->group = -1;
         I.freeBodies.push_back(id.index);
-        I.dirty = true;
     }
 
     bool World::contains(BodyId id) const { return impl_->body(id) != nullptr; }
@@ -228,7 +236,7 @@ namespace hf {
         if (!massProperties(b->desc.isStatic, mass, inertia)) return impl_->reject(false);
         b->desc.mass = mass;
         b->desc.inertia = inertia;
-        impl_->dirty = true;
+        impl_->bodyMassChanged(*b);
         wakeUp(b);
         impl_->wakePartners(id);
         return true;
@@ -238,8 +246,8 @@ namespace hf {
         BodySlot *b = impl_->body(id);
         if (!b || b->desc.isStatic == isStatic) return;
         b->desc.isStatic = isStatic;
-        impl_->dirty = true;
         wakeUp(b);
+        if (!b->kinematic) impl_->bodyMassChanged(*b);
     }
 
     bool World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
@@ -335,7 +343,7 @@ namespace hf {
         JointSlot &j = I.joints[index];
         j.desc = desc;
         startDrive(I, j);
-        I.dirty = true;
+        I.touchJoint(desc);
         wakeEnds(I, desc);
         return {index, j.generation};
     }
@@ -345,10 +353,10 @@ namespace hf {
         JointSlot *j = I.joint(id);
         if (!j) return;
         wakeEnds(I, j->desc);
+        I.touchJoint(j->desc);
         j->alive = false;
         ++j->generation;
         I.freeJoints.push_back(id.index);
-        I.dirty = true;
     }
 
     bool World::contains(JointId id) const { return impl_->joint(id) != nullptr; }
@@ -362,10 +370,11 @@ namespace hf {
         wakeEnds(I, desc);
         const bool reshape = !sameShape(j->desc, desc);
         const double target = j->desc.target;
+        if (reshape) I.touchJoint(j->desc);
         j->desc = desc;
         if (reshape) {
             startDrive(I, *j);
-            I.dirty = true;
+            I.touchJoint(desc);
             return true;
         }
         if (positionDrive(desc.type)) {

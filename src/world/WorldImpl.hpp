@@ -240,7 +240,11 @@ namespace hf {
         std::vector<Group> groups; // 0: the world
         std::vector<MachineData> machines;
         std::vector<JointRef> looseSprings; // springs not inside one machine, solved in the contact sweep
+        // Every group and machine rebuilt, as a weld changing needs. Short of that, only the machines of the groups
+        // touched: what a joint changing, or a body joining or leaving one, needs.
         bool dirty = true;
+        std::vector<int> touched, touchedMachines, freeGroups;
+        std::vector<std::uint8_t> machineMark;
         double h = 0.0;
 
         std::vector<ContactData> contacts;
@@ -315,12 +319,19 @@ namespace hf {
 
         // Groups.cpp
         void rebuildGroups();
+        int addGroup(BodySlot &b); // a body alone: a group of its own, in place
+        void freeGroup(int group);
+        void setGroupMass(int group, const BodySlot &b);
+        void touch(int group); // its machine, if any, and the one it may join, rebuilt before the next step
+        void touchJoint(const JointDesc &d);
+        void touchJointsOf(BodyId body);   // its joints' machines: it joins or leaves one
+        void bodyMassChanged(BodySlot &b); // in place for a body alone in its group, else a rebuild
         template <typename Find>
         void placeWelds(Find &find);
         void bodyState(const BodySlot &b, Vec3 &c, Quat &q, Vec3 &v, Vec3 &w) const;
 
         // Machines.cpp
-        void buildMachines();
+        void buildMachines(); // every machine, or only those of the touched groups
         void readState(MachineData &md);
         void writeVelocities(MachineData &md);
         void writePoses(MachineData &md);

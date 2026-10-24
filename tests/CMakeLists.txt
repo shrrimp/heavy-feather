@@ -22,6 +22,7 @@ set(HF_TEST_SOURCES
   BoxLcpTests.cpp
   DenseTests.cpp
   DriveTests.cpp
+  EditTests.cpp
   FaultTests.cpp
   HostMoveTests.cpp
   IslandTests.cpp

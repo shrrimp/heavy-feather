@@ -72,8 +72,114 @@ namespace hf {
         }
     }
 
+    int World::Impl::addGroup(BodySlot &b) {
+        int gi;
+        if (!freeGroups.empty()) {
+            gi = freeGroups.back();
+            freeGroups.pop_back();
+        } else {
+            gi = int(groups.size());
+            groups.emplace_back();
+        }
+        Group &g = groups[std::size_t(gi)];
+        g = Group{};
+        g.c = g.c0 = b.desc.position;
+        g.q = g.q0 = b.desc.orientation;
+        g.members = 1;
+        b.group = gi;
+        b.offset = Vec3{};
+        b.rot = Quat{};
+        setGroupMass(gi, b);
+        if (!g.isStatic) {
+            g.v = b.desc.velocity;
+            g.w = b.desc.angularVelocity;
+        }
+        return gi;
+    }
+
+    void World::Impl::freeGroup(int gi) {
+        groups[std::size_t(gi)] = Group{};
+        freeGroups.push_back(gi);
+    }
+
+    // A group of one body: its mass, inertia and extent are the body's, in the body's own axes.
+    void World::Impl::setGroupMass(int gi, const BodySlot &b) {
+        Group &g = groups[std::size_t(gi)];
+        g.isStatic = b.desc.isStatic || !(b.desc.mass > 0.0) || b.kinematic;
+        g.kinematic = b.kinematic;
+        const double m = std::max(b.desc.mass, 0.0);
+        g.radius = b.desc.radius > 0.0 ? b.desc.radius : radiusFromInertia(m, b.desc.inertia);
+        if (b.desc.isStatic || !(b.desc.mass > 0.0)) {
+            g.invMass = 0.0;
+            g.v = g.w = Vec3{};
+            return;
+        }
+        g.invMass = 1.0 / b.desc.mass;
+        g.inertiaBody = b.desc.inertia;
+        g.invInertiaBody = inverse(g.inertiaBody);
+    }
+
+    void World::Impl::touch(int gi) {
+        if (gi <= 0) return;
+        touched.push_back(gi);
+    }
+
+    void World::Impl::touchJoint(const JointDesc &d) {
+        if (d.type == JointType::Fixed) {
+            dirty = true;
+            return;
+        }
+        for (BodyId id : {d.a, d.b}) {
+            const BodySlot *b = body(id);
+            if (!b) continue;
+            if (b->group < 0) dirty = true;
+            else touch(b->group);
+        }
+    }
+
+    void World::Impl::touchJointsOf(BodyId id) {
+        for (const JointSlot &j : joints)
+            if (j.alive && (j.desc.a == id || j.desc.b == id)) touchJoint(j.desc);
+        const BodySlot *b = body(id);
+        if (b && b->group > 0 && groups[std::size_t(b->group)].machine >= 0)
+            touchedMachines.push_back(groups[std::size_t(b->group)].machine);
+    }
+
+    void World::Impl::bodyMassChanged(BodySlot &b) {
+        if (dirty || b.group < 0 || groups[std::size_t(b.group)].members > 1) {
+            dirty = true;
+            return;
+        }
+        Group &g = groups[std::size_t(b.group)];
+        const bool wasStatic = g.isStatic;
+        const Vec3 v = g.v, w = g.w;
+        setGroupMass(b.group, b);
+        if (g.isStatic != wasStatic) {
+            // Static to moving or back: its joints make it a part of a machine, or no longer.
+            if (!g.isStatic) {
+                g.v = b.velocityWritten ? b.desc.velocity : Vec3{};
+                g.w = b.velocityWritten ? b.desc.angularVelocity : Vec3{};
+            }
+            touchJointsOf({std::uint32_t(&b - bodies.data()), b.generation});
+            return;
+        }
+        if (!g.isStatic) {
+            g.v = v;
+            g.w = w;
+        }
+        // A machine's link carries on with its new mass, the machine unbuilt.
+        if (g.machine >= 0) {
+            Link &L = machines[std::size_t(g.machine)].m.art.links[std::size_t(g.link)];
+            L.mass = b.desc.mass;
+            L.inertiaBody = g.inertiaBody;
+        }
+    }
+
     void World::Impl::rebuildGroups() {
         ++groupRebuilds;
+        freeGroups.clear();
+        touched.clear();
+        touchedMachines.clear();
         // Where the step left each body, unless the host has written it since.
         for (BodySlot &b : bodies) {
             if (!b.alive || b.group < 0) continue;
@@ -127,6 +233,7 @@ namespace hf {
                 groups.push_back(g);
             }
             b.group = groupOfRoot[r];
+            ++groups[std::size_t(b.group)].members;
         }
 
         // Mass and centre of mass.

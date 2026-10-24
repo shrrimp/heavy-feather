@@ -82,6 +82,7 @@ namespace hf {
         Vec3 force{}, torque{}; // for this step, about c
         Vec3 pv{}, pw{};        // pseudo velocities: the position pass, one sub-step only
         int machine = -1, link = -1;
+        int members = 0;         // its bodies; none, past group 0, and the slot is free for the next body added
         bool frozen = false;     // not stepped this step: asleep, and nothing awake reached it
         int island = -1;         // stepped: which island, the groups touching or jointed to it; -1 otherwise
         double correction = 0.0; // how far the position pass moved it in the last sub-step
