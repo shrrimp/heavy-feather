@@ -24,12 +24,24 @@ mass of everything attached to it.
   machines they touch. A contact reported before it touches is speculative, so a fast body stops
   on a surface instead of passing through it. A contact the host marks as part of a mechanism, a
   cam on its follower or a gear on its gear, is solved with its machine's joints instead, exactly,
-  its friction bounded by however hard it ends up pushing.
+  its friction bounded by however hard it ends up pushing. Each island is solved on its own
+  budget: one holding a machine as hard as a machine needs, one of rigid bodies alone on lean rows
+  made once a step, its impacts swept harder than its resting rows.
 - **World**: what the host talks to. It takes bodies, joints and contacts, works out the
-  machines, and steps them.
+  machines, and steps them. A body is posed by its origin, its centre of mass wherever its mass
+  is, so an edit that moves the mass leaves the body and its joints where they were. A free body
+  added or edited changes its own group, and a joint its own machines: the world is rebuilt only
+  for a weld.
+- **Moves**: one call for each way the host moves a body. A machine moved whole keeps its joints;
+  a static anchor moved carries what hangs on it; a kinematic body is moved by the host alone and
+  pushes and carries what it touches, a machine anchored on it riding on its motion; a joint is
+  set by hand from the machine's root; a grab pulls a point toward the mouse, never harder than
+  its cap.
 - **Sleep**: a body still for a few steps falls asleep and stops being stepped, until a push, an
   edit or an awake neighbour wakes it. A machine sleeps whole. What is stepped splits into
-  islands, the bodies touching or jointed to each other.
+  islands, the bodies touching or jointed to each other. Contacts between sleepers stay in the
+  world with their impulses, so the host hands only pairs with an awake end, and a sleeper woken
+  stands on what held it.
 - **Faults**: a row only writes into the moving bodies of its own island, never into the ground
   or a sleeper it touches, so a NaN born in an island stays there. Once the step is done the world
   looks for one: an island that has one, or a body faster than the host allows, is put back as the
