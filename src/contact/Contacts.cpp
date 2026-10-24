@@ -67,6 +67,13 @@ namespace hf {
         }
         kept.resize(still);
         newlyKept.clear();
+        // What the world keeps is what the host handed once: room for as many as it has ever handed, made as the
+        // host hands more, so a pile falling asleep allocates nothing as its contacts move into the world's keeping.
+        const std::size_t room = contacts.capacity();
+        if (newlyKept.capacity() < room) newlyKept.reserve(room);
+        if (kept.capacity() < room) kept.reserve(room);
+        if (keptScratch.capacity() < room) keptScratch.reserve(room);
+        if (keptPairs.capacity() < room) keptPairs.reserve(room);
 
         // A gap starts cold: replaying an impulse across it would pull the pair together. So does a pair the host
         // moved: what pushed it where it was doesn't push it where it is.
