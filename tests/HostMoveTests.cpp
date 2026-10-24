@@ -286,3 +286,66 @@ TEST_CASE("a machine link can't be made kinematic") {
     CHECK(!w.setKinematic(rods[1], true));
     CHECK(!w.kinematic(rods[1]));
 }
+
+TEST_CASE("a servo set to half a radian by hand holds there, every other joint as it was") {
+    World w;
+    std::vector<BodyId> rods;
+    std::vector<JointId> servos;
+    for (int i = 0; i < 3; ++i) {
+        const Vec3 a{double(i), 2, 0};
+        rods.push_back(rodBetween(w, a, a + Vec3{1, 0, 0}, 5.0));
+        JointDesc s = jointAt(w, JointType::Servo, i ? rods[std::size_t(i) - 1] : BodyId{}, rods.back(), a, kZ);
+        s.maxForce = 1e4;
+        s.min = -2.0;
+        s.max = 2.0;
+        servos.push_back(w.addJoint(s));
+    }
+    run(w, 0.5);
+    const std::vector<double> before = coordinates(w, servos);
+    REQUIRE(w.setJointPosition(servos[1], 0.5));
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[1]) - 0.5) < 1e-12, "it is there at once");
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[0]) - before[0]) < 1e-12, "the joint before it as it was");
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[2]) - before[2]) < 1e-12, "and the one after it");
+    CHECK_MESSAGE(w.target(servos[1]) == 0.5, "its drive holds there");
+    for (int i = 0; i < 300; ++i) {
+        w.step(kDt);
+        if (std::fabs(w.jointPosition(servos[1]) - 0.5) > 1e-3) break;
+    }
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[1]) - 0.5) < 1e-3, "and holds half a radian five seconds on");
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[0]) - before[0]) < 1e-3, "every other joint holding where it was");
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servos[2]) - before[2]) < 1e-3, "this one too");
+}
+
+TEST_CASE("a piston set mid-course by hand holds there within its deadband") {
+    World w;
+    const BodyId ram = rodBetween(w, Vec3{0, 1, 0}, Vec3{0, 2, 0}, 20.0);
+    JointDesc p = jointAt(w, JointType::Piston, BodyId{}, ram, Vec3{0, 1, 0}, Vec3{0, 1, 0});
+    p.maxForce = 1e5;
+    p.min = -0.5;
+    p.max = 0.5;
+    const JointId piston = w.addJoint(p);
+    run(w, 0.5);
+    REQUIRE(w.setJointPosition(piston, 0.3));
+    CHECK_MESSAGE(std::fabs(w.position(ram).y - 1.8) < 1e-9, "the ram went 30 cm up its axis");
+    run(w, 5.0);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(piston) - 0.3) < 1e-3, "and holds there");
+    CHECK_MESSAGE(w.setJointPosition(piston, 9.0), "past the stop, it is clamped");
+    CHECK_MESSAGE(std::fabs(w.jointPosition(piston) - 0.5) < 1e-12, "to the course's end");
+}
+
+TEST_CASE("only a tree joint of one coordinate can be set by hand") {
+    World w;
+    const BodyId a = rodBetween(w, Vec3{0, 2, 0}, Vec3{1, 2, 0}, 5.0),
+                 b = rodBetween(w, Vec3{1, 2, 0}, Vec3{2, 2, 0}, 5.0);
+    const JointId ball = w.addJoint(jointAt(w, JointType::Ball, BodyId{}, a, Vec3{0, 2, 0}, kZ));
+    w.addJoint(jointAt(w, JointType::Hinge, a, b, Vec3{1, 2, 0}, kZ));
+    // A third link closing a loop back to the world: one hinge of it is a cut.
+    const BodyId c = rodBetween(w, Vec3{2, 2, 0}, Vec3{2, 1, 0}, 5.0);
+    const JointId h1 = w.addJoint(jointAt(w, JointType::Hinge, b, c, Vec3{2, 2, 0}, kZ));
+    const JointId h2 = w.addJoint(jointAt(w, JointType::Hinge, c, BodyId{}, Vec3{2, 1, 0}, kZ));
+    w.step(kDt);
+    CHECK_MESSAGE(!w.setJointPosition(ball, 0.1), "a ball joint has three coordinates");
+    const JointId cut = w.jointInfo(h1).tree ? h2 : h1;
+    REQUIRE(!w.jointInfo(cut).tree);
+    CHECK_MESSAGE(!w.setJointPosition(cut, 0.1), "a loop's cut isn't a coordinate at all");
+}

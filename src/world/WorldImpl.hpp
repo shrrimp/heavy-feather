@@ -393,6 +393,7 @@ namespace hf {
         // velocities turn too. Their bodies are moved by the host: their contacts and machine rows start cold.
         void moveGroups(const std::vector<std::uint8_t> &mark, const Vec3 &fromC, const Quat &fromQ, const Vec3 &toC,
                         const Quat &toQ);
+        void movedByHost(const std::vector<std::uint8_t> &mark); // their bodies written, cold, and awake
         bool followAnchors(MachineData &md); // carried along by an anchor that moved: true if it was
         void carryAnchoredOn(int group);     // every machine anchored on the group, sleeping or not
         void markMachine(int machine, std::vector<std::uint8_t> &mark) const;

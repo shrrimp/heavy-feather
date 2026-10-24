@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -57,6 +58,10 @@ namespace hf {
             g.targetC = toC + d * (g.targetC - fromC);
             g.targetQ = normalize(d * g.targetQ);
         }
+        movedByHost(mark);
+    }
+
+    void World::Impl::movedByHost(const std::vector<std::uint8_t> &mark) {
         for (BodySlot &b : bodies) {
             if (!b.alive || b.group < 0 || !mark[std::size_t(b.group)]) continue;
             bodyState(b, b.desc.position, b.desc.orientation, b.desc.velocity, b.desc.angularVelocity);
@@ -276,6 +281,55 @@ namespace hf {
             if (!j.alive || j.desc.type == JointType::Fixed) continue;
             const BodySlot *a = I.body(j.desc.a), *c = I.body(j.desc.b);
             if ((a && a->group == b->group) || (c && c->group == b->group)) I.touchJoint(j.desc);
+        }
+        return true;
+    }
+
+    bool World::setJointPosition(JointId id, double position) {
+        Impl &I = *impl_;
+        JointSlot *j = I.joint(id);
+        if (!j) return false;
+        if (!std::isfinite(position)) return I.reject(false);
+        I.build();
+        const JointType t = j->desc.type;
+        if (t == JointType::Fixed || t == JointType::Ball || t == JointType::Spring) return false;
+        if (j->info.machine < 0 || !j->info.tree || j->info.duplicate) return false;
+        MachineData &md = I.machines[std::size_t(j->info.machine)];
+        const JointRef *ref = nullptr;
+        for (const JointRef &r : md.joints)
+            if (r.joint == id.index) ref = &r;
+        if (!ref || ref->treeLink < 0) return false;
+        if (t == JointType::Slider || positionDrive(t)) position = std::clamp(position, j->desc.min, j->desc.max);
+
+        // The machine as it stands, in its coordinates; that one set; the links beyond it placed from the root out.
+        I.readState(md);
+        Articulation &art = md.m.art;
+        const int moved = ref->treeLink;
+        art.q[std::size_t(art.links[std::size_t(moved)].coord)] = ref->sign * position;
+        std::vector<std::uint8_t> &beyond = I.machineMark;
+        beyond.assign(art.links.size(), 0);
+        beyond[std::size_t(moved)] = 1;
+        for (std::size_t l = std::size_t(moved) + 1; l < art.links.size(); ++l)
+            if (art.links[l].parent >= 0) beyond[l] = beyond[std::size_t(art.links[l].parent)];
+        for (std::size_t l = 0; l < art.links.size(); ++l) {
+            if (!beyond[l]) continue;
+            const Link &L = art.links[l];
+            for (int k = 0; k < L.ndof; ++k) art.qdot[std::size_t(L.dof0 + k)] = 0.0;
+        }
+        art.forwardKinematics();
+        I.writePoses(md);
+
+        I.groupMark.assign(I.groups.size(), 0);
+        for (int g : md.groupOfLink) I.groupMark[std::size_t(g)] = 1;
+        I.movedByHost(I.groupMark);
+        md.lastVel.clear();
+        md.lastPos.clear();
+        // A drive holds where it was put.
+        if (positionDrive(t)) {
+            j->desc.target = j->targetFrom = j->targetTo = j->targetEff = j->holdPos = position;
+            j->position = j->positionPrev = position;
+            j->lambda = 0.0;
+            j->commanded = true;
         }
         return true;
     }

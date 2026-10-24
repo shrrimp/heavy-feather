@@ -138,6 +138,12 @@ namespace hf {
         bool setLever(JointId joint, double lever);
         double target(JointId joint) const;
         double jointPosition(JointId joint) const; // a hinge's or servo's angle in rad, a slider's position in m
+        // Puts a joint at a position, as the operator turning one part of a machine by hand: the part beyond it, away
+        // from the machine's root, turns or slides there, its rates and its subtree's stopped, and a servo or piston
+        // holds there. For a tree joint of one coordinate (JointInfo::tree): a hinge, motor, servo, angular spring,
+        // slider or piston; clamped to the course of the last three. A loop through what moved closes in the
+        // following steps.
+        bool setJointPosition(JointId joint, double position);
         double driveForce(JointId joint) const;    // over the last sub-step, N or N·m
         JointInfo jointInfo(JointId joint) const;
 
