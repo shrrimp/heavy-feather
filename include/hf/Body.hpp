@@ -24,6 +24,10 @@ namespace hf {
         double radius = 0.0;
 
         bool isStatic = false;
+        // Never turns: contacts, joints and torques push it about, but its orientation stays as set, and a pose write
+        // is the only thing that changes it. A character standing upright. A weld group holding one turns with none.
+        // Not held as a machine's link: there its joints turn it like any other.
+        bool fixedRotation = false;
     };
 
     // A body's pose and motion, read at once.

@@ -85,6 +85,7 @@ namespace hf {
         Mat3 inertiaBody{}, invInertiaBody{};
         double radius = 0.0;
         bool isStatic = true;
+        bool fixedRotation = false; // a member's BodyDesc::fixedRotation: invInertiaBody is zero, w stays zero
         // Moved by the host, static to the solver: its velocity is what takes it to its target this step.
         bool kinematic = false;
         Vec3 targetC{};

@@ -117,7 +117,9 @@ namespace hf {
         }
         g.invMass = 1.0 / b.desc.mass;
         g.inertiaBody = b.desc.inertia;
-        g.invInertiaBody = inverse(g.inertiaBody);
+        g.fixedRotation = b.desc.fixedRotation;
+        g.invInertiaBody = g.fixedRotation ? Mat3{} : inverse(g.inertiaBody);
+        if (g.fixedRotation) g.w = Vec3{};
     }
 
     void World::Impl::touch(int gi) {
@@ -307,6 +309,7 @@ namespace hf {
             Group &g = groups[std::size_t(b.group)];
             if (b.desc.isStatic || !(b.desc.mass > 0.0)) g.isStatic = true;
             if (b.kinematic) g.kinematic = true;
+            if (b.desc.fixedRotation) g.fixedRotation = true;
             if (b.desc.mass > 0.0) {
                 M[std::size_t(b.group)] += b.desc.mass;
                 mc[std::size_t(b.group)] += b.desc.mass * b.desc.position;
@@ -341,9 +344,9 @@ namespace hf {
             const Mat3 Ibody = transpose(R) * Iw[gi] * R;
             const bool solid = std::fabs(determinant(Ibody)) > 1e-300;
             g.inertiaBody = solid ? Ibody : Mat3(1e-3 * M[gi]);
-            g.invInertiaBody = inverse(g.inertiaBody);
+            g.invInertiaBody = g.fixedRotation ? Mat3{} : inverse(g.inertiaBody);
             g.v = P[gi] / M[gi];
-            g.w = std::fabs(determinant(Iw[gi])) > 1e-300 ? inverse(Iw[gi]) * L[gi] : Vec3{};
+            g.w = !g.fixedRotation && std::fabs(determinant(Iw[gi])) > 1e-300 ? inverse(Iw[gi]) * L[gi] : Vec3{};
         }
         // A kinematic group keeps its mass for when it is let go, but is static to the solver until then.
         for (Group &g : groups) {

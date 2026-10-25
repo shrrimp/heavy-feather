@@ -106,6 +106,10 @@ namespace hf {
             Group &g = groups[std::size_t(gi)];
             if (!rigid(g)) continue;
             g.v += h * (g.invMass * g.force + settings.gravity);
+            if (g.fixedRotation) {
+                g.w = Vec3{}; // what the host wrote, or a rebuild shared out: the rows alone leave it at zero
+                continue;
+            }
             g.w += h * (g.invInertiaWorld() * g.torque);
             gyroscopic(g, h);
         }

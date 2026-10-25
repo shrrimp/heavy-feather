@@ -25,6 +25,7 @@ set(HF_TEST_SOURCES
   DriveTests.cpp
   EditTests.cpp
   FaultTests.cpp
+  FixedRotationTests.cpp
   GrabTests.cpp
   HostMoveTests.cpp
   IslandTests.cpp

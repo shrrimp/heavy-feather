@@ -148,6 +148,7 @@ namespace hf {
         // Inside the world a body is placed by its centre of mass: the origin is only how the host sees it.
         b.desc = desc;
         b.desc.orientation = normalize(desc.orientation);
+        if (desc.fixedRotation) b.desc.angularVelocity = Vec3{};
         b.desc.position = desc.position + b.desc.orientation * desc.centerOfMass;
         b.alive = true;
         // A body alone is a group of its own, made in place: nothing else is rebuilt for it.
@@ -267,6 +268,15 @@ namespace hf {
         b->desc.isStatic = isStatic;
         wakeUp(b);
         if (!b->kinematic) impl_->bodyMassChanged(*b);
+    }
+
+    void World::setFixedRotation(BodyId id, bool fixed) {
+        BodySlot *b = impl_->body(id);
+        if (!b || b->desc.fixedRotation == fixed) return;
+        b->desc.fixedRotation = fixed;
+        b->desc.angularVelocity = Vec3{};
+        wakeUp(b);
+        impl_->bodyMassChanged(*b);
     }
 
     bool World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {

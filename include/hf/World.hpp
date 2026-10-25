@@ -119,6 +119,8 @@ namespace hf {
         bool setMassProperties(BodyId body, double mass, const Mat3 &inertia, const Vec3 &centerOfMass);
         // A static body doesn't move and isn't pushed: one pinned in place.
         void setStatic(BodyId body, bool isStatic);
+        // See BodyDesc::fixedRotation. Turned on, the body stops turning where it is; off, it carries on from rest.
+        void setFixedRotation(BodyId body, bool fixed);
         // A body still for long enough falls asleep, and isn't stepped until a push, an edit or an awake neighbour
         // wakes it. Its contacts still matter: they tell the world what it rests on, at no cost to the solve.
         bool asleep(BodyId body) const;

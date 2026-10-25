@@ -224,8 +224,9 @@ namespace hf {
                 Link L;
                 L.parent = parentLink;
                 L.mass = 1.0 / g.invMass;
-                L.inertiaBody =
-                    std::fabs(determinant(g.invInertiaBody)) > 1e-300 ? inverse(g.invInertiaBody) : Mat3(L.mass * 1e-3);
+                L.inertiaBody = g.fixedRotation ? g.inertiaBody
+                                : std::fabs(determinant(g.invInertiaBody)) > 1e-300 ? inverse(g.invInertiaBody)
+                                                                                    : Mat3(L.mass * 1e-3);
                 if (!via) {
                     L.kind = JointKind::Free;
                 } else {
