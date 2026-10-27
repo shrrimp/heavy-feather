@@ -274,7 +274,7 @@ namespace hf {
         const Motion ag{Vec3{}, g};
         for (std::size_t i = 0; i < links.size(); ++i) {
             Link &L = links[i];
-            L.F = L.I * (L.A - ag) + crossF(L.V, L.I * L.V);
+            L.F = L.I * (L.A - L.gravityScale * ag) + crossF(L.V, L.I * L.V) + L.damping * (L.I * L.V);
             if (!fext.empty()) L.F = L.F - fext[i];
         }
         for (std::size_t i = links.size(); i-- > 0;) {

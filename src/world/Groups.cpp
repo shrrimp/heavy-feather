@@ -110,6 +110,8 @@ namespace hf {
         g.kinematic = b.kinematic;
         const double m = std::max(b.desc.mass, 0.0);
         g.radius = b.desc.radius > 0.0 ? b.desc.radius : radiusFromInertia(m, b.desc.inertia);
+        g.gravityScale = std::isfinite(b.desc.gravityScale) ? b.desc.gravityScale : 1.0;
+        g.damping = (!std::isnan(b.desc.damping) && b.desc.damping >= 0.0) ? b.desc.damping : 0.0;
         if (b.desc.isStatic || !(b.desc.mass > 0.0)) {
             g.invMass = 0.0;
             g.v = g.w = Vec3{};
@@ -237,6 +239,8 @@ namespace hf {
             Link &L = machines[std::size_t(g.machine)].m.art.links[std::size_t(g.link)];
             L.mass = b.desc.mass;
             L.inertiaBody = g.inertiaBody;
+            L.gravityScale = g.gravityScale;
+            L.damping = g.damping;
         }
     }
 
@@ -304,6 +308,7 @@ namespace hf {
         // Mass and centre of mass.
         std::vector<double> M(groups.size(), 0.0);
         std::vector<Vec3> mc(groups.size());
+        std::vector<double> ms(groups.size(), 0.0), md(groups.size(), 0.0); // sum of m.scale and damping
         for (const BodySlot &b : bodies) {
             if (!b.alive) continue;
             Group &g = groups[std::size_t(b.group)];
@@ -313,6 +318,8 @@ namespace hf {
             if (b.desc.mass > 0.0) {
                 M[std::size_t(b.group)] += b.desc.mass;
                 mc[std::size_t(b.group)] += b.desc.mass * b.desc.position;
+                ms[std::size_t(b.group)] += b.desc.mass * b.desc.gravityScale;
+                md[std::size_t(b.group)] += b.desc.mass * b.desc.damping;
             }
         }
         for (std::size_t gi = 1; gi < groups.size(); ++gi)
@@ -340,6 +347,8 @@ namespace hf {
             Group &g = groups[gi];
             if (g.isStatic) continue;
             g.invMass = 1.0 / M[gi];
+            g.gravityScale = ms[gi] / M[gi];
+            g.damping = md[gi] / M[gi];
             const Mat3 R = toMat3(g.q);
             const Mat3 Ibody = transpose(R) * Iw[gi] * R;
             const bool solid = std::fabs(determinant(Ibody)) > 1e-300;

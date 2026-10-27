@@ -224,6 +224,8 @@ namespace hf {
                 Link L;
                 L.parent = parentLink;
                 L.mass = 1.0 / g.invMass;
+                L.gravityScale = g.gravityScale;
+                L.damping = g.damping;
                 L.inertiaBody = g.fixedRotation ? g.inertiaBody
                                 : std::fabs(determinant(g.invInertiaBody)) > 1e-300 ? inverse(g.invInertiaBody)
                                                                                     : Mat3(L.mass * 1e-3);

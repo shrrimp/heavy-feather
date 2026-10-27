@@ -36,6 +36,9 @@ namespace hf {
         double mass = 0.0;
         Mat3 inertiaBody{}; // about the centre of mass, body axes
 
+        double gravityScale = 1.0;
+        double damping = 0.0;
+
         int dof0 = 0; // first generalised velocity
         int ndof = 0;
         int coord = -1; // into q (revolute, prismatic) or qRot (spherical)

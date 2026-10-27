@@ -121,6 +121,10 @@ namespace hf {
         void setStatic(BodyId body, bool isStatic);
         // See BodyDesc::fixedRotation. Turned on, the body stops turning where it is; off, it carries on from rest.
         void setFixedRotation(BodyId body, bool fixed);
+        // Sets the gravity scale for that body, only finite values accepted
+        bool setGravityScale(BodyId body, double scale);
+        // Sets the damping of that body, damps world movement of the body, negative and NaN rejected
+        bool setDamping(BodyId body, double rate);
         // A body still for long enough falls asleep, and isn't stepped until a push, an edit or an awake neighbour
         // wakes it. Its contacts still matter: they tell the world what it rests on, at no cost to the solve.
         bool asleep(BodyId body) const;
@@ -148,13 +152,14 @@ namespace hf {
         bool setLever(JointId joint, double lever);
         double target(JointId joint) const;
         double jointPosition(JointId joint) const; // a hinge's or servo's angle in rad, a slider's position in m
+        double jointVelocity(JointId joint) const; // how fast that position changes, in rad/s or m/s
         // Puts a joint at a position, as the operator turning one part of a machine by hand: the part beyond it, away
         // from the machine's root, turns or slides there, its rates and its subtree's stopped, and a servo or piston
         // holds there. For a tree joint of one coordinate (JointInfo::tree): a hinge, motor, servo, angular spring,
         // slider or piston; clamped to the course of the last three. A loop through what moved closes in the
         // following steps.
         bool setJointPosition(JointId joint, double position);
-        double driveForce(JointId joint) const;    // over the last sub-step, N or N·m
+        double driveForce(JointId joint) const; // over the last sub-step, N or N·m
         JointInfo jointInfo(JointId joint) const;
 
         // A grab of a body at a point in its own axes, from its origin: the mouse's hand on it. It keeps the

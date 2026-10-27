@@ -196,3 +196,40 @@ TEST_CASE("a course narrowed in place brings its servo back inside") {
     run(w, 2.0);
     CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - 0.6) < 1e-3, "and the drive holds it there");
 }
+
+TEST_CASE("a joint's velocity is how fast its position changes, its slider riding a turning arm") {
+    World w(WorldSettings{.gravity = Vec3{}});
+    const BodyId arm = rodBetween(w, Vec3{0, 0, 0}, Vec3{4, 0, 0}, 20.0);
+    const BodyId bead = rodBetween(w, Vec3{1, 0, 0}, Vec3{1.4, 0, 0}, 2.0);
+    JointDesc m = jointAt(w, JointType::Motor, BodyId{}, arm, Vec3{}, kZ);
+    m.speed = 2.0;
+    const JointId motor = w.addJoint(m);
+    JointDesc s = jointAt(w, JointType::Slider, arm, bead, Vec3{1.2, 0, 0}, Vec3{1, 0, 0});
+    s.min = -1.0;
+    s.max = 2.0;
+    const JointId slider = w.addJoint(s);
+    w.setLever(motor, 1.0);
+    run(w, 0.5);
+    CHECK_MESSAGE(std::fabs(w.jointVelocity(motor) - 2.0) < 1e-6, "a full lever: the motor's speed");
+
+    // Flung out along the arm as it turns.
+    const double before = w.jointPosition(slider);
+    w.step(kDt);
+    const double now = w.jointVelocity(slider);
+    w.step(kDt);
+    const double rate = (w.jointPosition(slider) - before) / (2.0 * kDt);
+    CHECK(now > 0.1);
+    CHECK(std::fabs(now - rate) < 1e-2 * now);
+}
+
+TEST_CASE("a piston's velocity is its lever times its speed") {
+    World w;
+    const JointId piston = boomOnCylinder(w);
+    run(w, 0.5);
+    w.setLever(piston, -1.0);
+    run(w, 0.2);
+    CHECK(std::fabs(w.jointVelocity(piston) + 0.5) < 1e-3);
+    w.setLever(piston, 0.0);
+    run(w, 0.5);
+    CHECK_MESSAGE(std::fabs(w.jointVelocity(piston)) < 1e-6, "parked");
+}

@@ -53,7 +53,8 @@ namespace hf {
 
         bool usable(const BodyDesc &d) {
             return finite(d.position) && rotation(d.orientation) && finite(d.velocity) && finite(d.angularVelocity) &&
-                   finite(d.centerOfMass) && std::isfinite(d.radius) && massProperties(d.isStatic, d.mass, d.inertia);
+                   finite(d.centerOfMass) && std::isfinite(d.radius) && std::isfinite(d.gravityScale) &&
+                   !std::isnan(d.damping) && (d.damping >= 0.0) && massProperties(d.isStatic, d.mass, d.inertia);
         }
 
         // At or above zero, and a number; infinite only where infinite means no limit.
@@ -279,6 +280,30 @@ namespace hf {
         impl_->bodyMassChanged(*b);
     }
 
+    bool World::setGravityScale(BodyId id, double scale) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return false;
+        if (!std::isfinite(scale)) return impl_->reject(false);
+        if (b->desc.gravityScale != scale) {
+            b->desc.gravityScale = scale;
+            wakeUp(b);
+            impl_->bodyMassChanged(*b);
+        }
+        return true;
+    }
+
+    bool World::setDamping(BodyId id, double rate) {
+        BodySlot *b = impl_->body(id);
+        if (!b) return false;
+        if (std::isnan(rate) || rate < 0.0) return impl_->reject(false);
+        if (b->desc.damping != rate) {
+            b->desc.damping = rate;
+            wakeUp(b);
+            impl_->bodyMassChanged(*b);
+        }
+        return true;
+    }
+
     bool World::setPose(BodyId id, const Vec3 &position, const Quat &orientation) {
         Impl &I = *impl_;
         BodySlot *b = I.body(id);
@@ -452,24 +477,32 @@ namespace hf {
         return j ? impl_->jointPosition(*j) : 0.0;
     }
 
+    double World::jointVelocity(JointId id) const {
+        const JointSlot *j = impl_->joint(id);
+        return j ? impl_->jointVelocity(*j) : 0.0;
+    }
+
+    void World::Impl::jointFrame(BodyId id, const Frame &f, Vec3 &p, Quat &q, Vec3 &v, Vec3 &w) const {
+        const BodySlot *b = body(id);
+        if (!b) {
+            p = f.position;
+            q = f.rotation;
+            v = w = Vec3{};
+            return;
+        }
+        Vec3 c;
+        Quat qb;
+        bodyState(*b, c, qb, v, w);
+        p = c + qb * (f.position - b->desc.centerOfMass);
+        q = qb * f.rotation;
+        v += cross(w, p - c);
+    }
+
     double World::Impl::jointPosition(const JointSlot &j) const {
-        const auto frame = [&](BodyId id, const Frame &f, Vec3 &p, Quat &q) {
-            const BodySlot *b = body(id);
-            if (!b) {
-                p = f.position;
-                q = f.rotation;
-                return;
-            }
-            Vec3 c, v, w;
-            Quat qb;
-            bodyState(*b, c, qb, v, w);
-            p = c + qb * (f.position - b->desc.centerOfMass);
-            q = qb * f.rotation;
-        };
-        Vec3 pA, pB;
+        Vec3 pA, pB, vA, vB, wA, wB;
         Quat qA, qB;
-        frame(j.desc.a, j.desc.frameA, pA, qA);
-        frame(j.desc.b, j.desc.frameB, pB, qB);
+        jointFrame(j.desc.a, j.desc.frameA, pA, qA, vA, wA);
+        jointFrame(j.desc.b, j.desc.frameB, pB, qB, vB, wB);
         switch (j.desc.type) {
             case JointType::Hinge:
             case JointType::Motor:
@@ -481,6 +514,30 @@ namespace hf {
             case JointType::Slider:
             case JointType::Piston: return dot(pB - pA, qA * Vec3{1, 0, 0});
             case JointType::Spring: return length(pA - pB);
+            case JointType::Fixed:
+            case JointType::Ball: return 0.0;
+        }
+        return 0.0;
+    }
+
+    double World::Impl::jointVelocity(const JointSlot &j) const {
+        Vec3 pA, pB, vA, vB, wA, wB;
+        Quat qA, qB;
+        jointFrame(j.desc.a, j.desc.frameA, pA, qA, vA, wA);
+        jointFrame(j.desc.b, j.desc.frameB, pB, qB, vB, wB);
+        const Vec3 x = qA * Vec3{1, 0, 0};
+        switch (j.desc.type) {
+            case JointType::Hinge:
+            case JointType::Motor:
+            case JointType::AngularSpring:
+            case JointType::Servo: return dot(wB - wA, x);
+            // The axis turns with A: what B does along it, and what turning it does to where B is along it.
+            case JointType::Slider:
+            case JointType::Piston: return dot(vB - vA, x) + dot(pB - pA, cross(wA, x));
+            case JointType::Spring: {
+                const double l = length(pA - pB);
+                return l > 0.0 ? dot(pA - pB, vA - vB) / l : 0.0;
+            }
             case JointType::Fixed:
             case JointType::Ball: return 0.0;
         }

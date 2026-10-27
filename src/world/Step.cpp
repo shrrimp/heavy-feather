@@ -105,13 +105,16 @@ namespace hf {
         for (int gi : mine) {
             Group &g = groups[std::size_t(gi)];
             if (!rigid(g)) continue;
-            g.v += h * (g.invMass * g.force + settings.gravity);
+            g.v += h * (g.invMass * g.force + g.gravityScale * settings.gravity);
+            const double k = 1.0 / (1.0 + h * g.damping);
+            g.v *= k;
             if (g.fixedRotation) {
                 g.w = Vec3{}; // what the host wrote, or a rebuild shared out: the rows alone leave it at zero
                 continue;
             }
             g.w += h * (g.invInertiaWorld() * g.torque);
             gyroscopic(g, h);
+            g.w *= k;
         }
         updateTurned();
         if (machinesPass)

@@ -331,6 +331,9 @@ namespace hf {
         JointSlot *joint(JointId id);
         const JointSlot *joint(JointId id) const;
         double jointPosition(const JointSlot &j) const; // from the bodies' poses
+        double jointVelocity(const JointSlot &j) const; // from the bodies' velocities
+        // A joint's frame on a body in the world, and how it moves: its point's velocity, its angular velocity.
+        void jointFrame(BodyId body, const Frame &f, Vec3 &p, Quat &q, Vec3 &v, Vec3 &w) const;
 
         // Groups.cpp
         void rebuildGroups();

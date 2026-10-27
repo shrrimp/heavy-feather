@@ -19,6 +19,9 @@ namespace hf {
         Mat3 inertia{1.0};   // about the centre of mass, body axes
         Vec3 centerOfMass{}; // from the origin, body axes
 
+        double gravityScale = 1.0; // the share of the world's gravity it feels: 0 floats
+        double damping = 0.0;      // 1/s: how fast its motion dies away, against the world
+
         // Bounding radius about the centre of mass, which caps how far a position correction may move the body in
         // one sub-step. 0: estimated from the inertia.
         double radius = 0.0;
