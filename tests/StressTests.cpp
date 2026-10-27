@@ -36,6 +36,7 @@ namespace {
             {"branches", [] { return branches(kSteps > 1 ? 6 : 4); }},
             {"scissor lift", [] { return scissorLift(kSteps > 1 ? 10 : 5); }},
             {"yard", [] { return yard(); }},
+            {"ropes", [] { return ropes(kSteps > 1 ? 6 : 2); }},
         };
         return list;
     }

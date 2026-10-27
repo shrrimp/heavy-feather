@@ -23,6 +23,7 @@ set(HF_SOURCES
   world/MachineRows.cpp
   world/Machines.cpp
   world/Moves.cpp
+  world/Ropes.cpp
   world/Sleep.cpp
   world/Step.cpp
   world/World.cpp)

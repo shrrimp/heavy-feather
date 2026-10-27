@@ -35,6 +35,7 @@ namespace {
             {"branches 511", [] { return branches(9); }, 300, 12.0},
             {"scissor lift 30", [] { return scissorLift(30); }, 300, 35.0},
             {"yard", [] { return yard(); }, 600, 40.0},
+            {"ropes 12", [] { return ropes(12); }, 600, 20.0},
         };
         return list;
     }

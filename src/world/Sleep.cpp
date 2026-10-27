@@ -290,6 +290,18 @@ namespace hf {
         for (const JointSlot &j : joints)
             if (j.alive && j.desc.a.valid() && j.desc.b.valid())
                 link(body(j.desc.a), body(j.desc.b), {.conducts = true, .jointed = true});
+        // A rope ties everything that moves along it, past whatever doesn't: a load hung over a pulley on the ground
+        // and the winch that holds it are one island.
+        for (const RopeSlot &r : ropes) {
+            if (!r.alive || r.broken) continue;
+            const BodySlot *last = nullptr;
+            for (const RopePoint &p : r.route) {
+                const BodySlot *b = body(p.body);
+                if (!b || groups[std::size_t(b->group)].isStatic) continue;
+                if (last) link(last, b, {.conducts = true, .jointed = true});
+                last = b;
+            }
+        }
 
         linkStart.assign(G + 1, 0);
         for (const SleepLink &l : sleepLinks) {
@@ -337,6 +349,15 @@ namespace hf {
             const BodySlot *b = s.alive ? body(s.body) : nullptr;
             if (b && b->group >= 0 && unitOf[std::size_t(b->group)] >= 0)
                 unitStill[std::size_t(unitOf[std::size_t(b->group)])] = 0;
+        }
+        // A spool at work keeps everything on its rope awake.
+        for (const RopeSlot &r : ropes) {
+            if (!r.alive || r.broken || !reeling(r)) continue;
+            for (const RopePoint &p : r.route) {
+                const BodySlot *b = body(p.body);
+                if (b && b->group >= 0 && unitOf[std::size_t(b->group)] >= 0)
+                    unitStill[std::size_t(unitOf[std::size_t(b->group)])] = 0;
+            }
         }
         for (std::size_t mi = 0; mi < machines.size(); ++mi) {
             const MachineData &md = machines[mi];

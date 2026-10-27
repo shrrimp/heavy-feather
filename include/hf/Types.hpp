@@ -32,6 +32,14 @@ namespace hf {
         bool operator==(const GrabId &) const = default;
     };
 
+    struct RopeId {
+        std::uint32_t index = ~0u;
+        std::uint32_t generation = 0;
+
+        bool valid() const { return index != ~0u; }
+        bool operator==(const RopeId &) const = default;
+    };
+
     // A frame on a body, from its origin in body axes. A joint's axis is its frame's X.
     struct Frame {
         Vec3 position{};

@@ -9,6 +9,7 @@
 #include "hf/Export.hpp"
 #include "hf/Fault.hpp"
 #include "hf/Joint.hpp"
+#include "hf/Rope.hpp"
 #include "hf/Types.hpp"
 
 namespace hf {
@@ -50,7 +51,7 @@ namespace hf {
     };
 
     struct WorldStats {
-        int bodies = 0, joints = 0, contacts = 0;
+        int bodies = 0, joints = 0, contacts = 0, ropes = 0;
         int machines = 0, links = 0, dofs = 0, rows = 0;
         int lcpPivots = 0, lcpFallbacks = 0;
         int stepped = 0, asleep = 0; // bodies
@@ -60,6 +61,7 @@ namespace hf {
         // Since the step before this one: whole-world rebuilds of the bodies' groups, and machines built.
         int groupRebuilds = 0, machineRebuilds = 0;
         int rigidRows = 0, machineRows = 0; // swept contact rows in each kind of island, the last sub-step
+        int ropeRows = 0, sweptRopes = 0;   // ropes held in a machine's solve, and swept between bodies, last step
         StepProfile profile;
     };
 
@@ -168,6 +170,36 @@ namespace hf {
         // Where the grabbed point is pulled to; with an orientation, and a torque cap, where the body is turned to.
         bool setGrabTarget(GrabId grab, const Vec3 &point, const Quat *orientation = nullptr);
         void release(GrabId grab);
+
+        // A rope along its route: its ends first and last, and between them whatever it runs round or slides through.
+        // Refused: fewer than two points, a body that is gone, a point or axis not finite, an axis of no length at a
+        // sheave, a radius, length, stiffness, strength, speed, force or damping negative or NaN, min over max.
+        RopeId addRope(const RopeDesc &desc, std::span<const RopePoint> route);
+        // How long a rope along this route would be, its bodies where they are now, sheaves included: what to pay out
+        // for one that is just taut. 0 for a route the world can't use. Given room, where it would run too, one bend a
+        // route point, as ropePath writes them: a host showing a rope between steps, its bodies moved by hand.
+        double routeSpan(std::span<const RopePoint> route, std::span<RopeBend> path = {}) const;
+        void removeRope(RopeId rope);
+        bool contains(RopeId rope) const;
+        // Its stiffness, strength and spools from the next step. A new length is paid out at once; a broken rope is
+        // mended.
+        bool setRope(RopeId rope, const RopeDesc &desc);
+        RopeDesc ropeDesc(RopeId rope) const;
+        // A new route for it, keeping what is paid out and how hard it pulls: where it catches on an edge, or comes off.
+        bool setRopeRoute(RopeId rope, std::span<const RopePoint> route);
+        // Pays it out, or takes it in, at once: the host's hand, as an editor stretching it.
+        bool setRopeLength(RopeId rope, double length);
+        // Works its spools like an operator's lever, from -1 to 1: positive pays the rope out at that fraction of the
+        // spools' speed, negative winds it in. Back at 0 the brake holds it where it is.
+        bool setSpoolLever(RopeId rope, double lever);
+        double ropeLength(RopeId rope) const;  // m: paid out now
+        double ropeSpan(RopeId rope) const;    // m: along its route as it lies, sheaves included
+        double ropeTension(RopeId rope) const; // N, over the last sub-step
+        RopeInfo ropeInfo(RopeId rope) const;
+        // The rope through its route as the last step solved it, one bend a route point: the number written.
+        int ropePath(RopeId rope, std::span<RopeBend> out) const;
+        // The ropes the last step broke. They stay in the world, slack, until the host removes or mends them.
+        std::span<const RopeId> brokenRopes() const;
 
         // The contacts for the next step. They are refreshed from their body-local points every sub-step, so the
         // host only detects once per step.

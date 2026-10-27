@@ -27,6 +27,7 @@ namespace host {
     Scene branches(int depth);     // a branching tree machine, 2^depth - 1 links
     Scene scissorLift(int stages); // a loop per stage, raised and lowered by one piston, a stack on top
     Scene yard();                  // everything at once: machines working in piles and on each other
+    Scene ropes(int cranes);       // rope cranes hoisting crates off the ground: hook blocks, slings, winches
 
     // A boom, stick and bucket, each on its own hydraulic cylinder: three loops.
     struct Excavator {

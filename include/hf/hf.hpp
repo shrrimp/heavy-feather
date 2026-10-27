@@ -4,6 +4,7 @@
 #include "hf/Contact.hpp"
 #include "hf/Fault.hpp"
 #include "hf/Joint.hpp"
+#include "hf/Rope.hpp"
 #include "hf/Types.hpp"
 #include "hf/Version.hpp"
 #include "hf/World.hpp"

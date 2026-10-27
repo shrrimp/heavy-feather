@@ -414,3 +414,80 @@ namespace host {
     }
 
 } // namespace host
+
+namespace host {
+
+    namespace {
+
+        // A rope's point on a body at a world point where the body is now; a sheave about a world axis.
+        hf::RopePoint ropeAt(Host &h, BodyId body, const Vec3 &at, double radius = 0.0, const Vec3 &axis = kZ) {
+            hf::RopePoint p;
+            p.body = body;
+            const Quat q = h.world.orientation(body);
+            p.position = conjugate(q) * (at - h.world.position(body));
+            p.axis = conjugate(q) * axis;
+            p.radius = radius;
+            return p;
+        }
+
+        struct RopeCrane {
+            JointId slew, luff;
+            hf::RopeId hoist;
+        };
+
+        // A slewing mast and a luffing jib, and a hoist: from a winch at the mast's foot, over a sheave at the jib's
+        // tip, down round a free hook block's sheave and back up to the tip, two strands. A short sling from the
+        // block to a crate standing on the ground.
+        RopeCrane addRopeCrane(Host &h, const Vec3 &at) {
+            const BodyId base = h.addBox(at + Vec3{0, 0.5, 0}, Quat{}, Vec3{1.0, 0.5, 1.0}, 0.0);
+            const BodyId mast = bar(h, at + Vec3{0, 1.0, 0}, at + Vec3{0, 5.0, 0}, 0.2, 400.0);
+            const BodyId jib = bar(h, at + Vec3{0, 5.0, 0}, at + Vec3{5, 5.0, 0}, 0.15, 300.0);
+            hf::JointDesc slew = h.jointAt(JointType::Motor, mast, base, at + Vec3{0, 1.0, 0}, kY);
+            slew.maxForce = 2e4;
+            RopeCrane c;
+            c.slew = h.addJoint(slew);
+            h.addJoint(h.jointAt(JointType::Hinge, jib, mast, at + Vec3{0, 5.0, 0}, kZ));
+            std::vector<BodyId> parts{base, mast, jib};
+            c.luff = addCylinder(h, mast, at + Vec3{0, 3.5, 0}, jib, at + Vec3{2.0, 5.0, 0}, 1e5, parts);
+            const BodyId block = h.addBox(at + Vec3{5.15, 3.0, 0}, Quat{}, Vec3{0.2, 0.2, 0.1}, 40.0);
+            parts.push_back(block);
+            ignoreAll(h, parts);
+            const BodyId crate = h.addBox(at + Vec3{5.15, 0.5, 0}, Quat{}, Vec3{0.5, 0.5, 0.5}, 600.0);
+            hf::RopeDesc d;
+            d.spool = hf::RopeSpool::Start;
+            d.speed = 0.4;
+            d.maxForce = 3e4;
+            d.brakeForce = 4e4;
+            d.minLength = 4.0;
+            const std::vector<hf::RopePoint> route{
+                ropeAt(h, base, at + Vec3{0.3, 1.0, 0}), ropeAt(h, jib, at + Vec3{5.0, 5.0, 0}, 0.15),
+                ropeAt(h, block, at + Vec3{5.15, 3.0, 0}, 0.15), ropeAt(h, jib, at + Vec3{5.3, 5.0, 0})};
+            d.length = h.world.routeSpan(route);
+            c.hoist = h.world.addRope(d, route);
+            hf::RopeDesc sling;
+            sling.length = 1.6;
+            h.world.addRope(sling, std::vector<hf::RopePoint>{ropeAt(h, block, at + Vec3{5.15, 2.8, 0}),
+                                                              ropeAt(h, crate, at + Vec3{5.15, 1.0, 0})});
+            return c;
+        }
+
+    } // namespace
+
+    Scene ropes(int cranes) {
+        Scene s{"ropes", std::make_unique<Host>(), nullptr};
+        std::vector<RopeCrane> list;
+        for (int i = 0; i < cranes; ++i) list.push_back(addRopeCrane(*s.host, Vec3{0, 0, 7.0 * i}));
+        // Short cycles, so a few seconds see every state: winding in, paying out, braked, luffed both ways.
+        s.operate = [list](Host &h, int i) {
+            for (std::size_t k = 0; k < list.size(); ++k) {
+                const int t = i + int(k) * 40;
+                const double phase = std::sin(t / 60.0 * 2.0);
+                h.world.setSpoolLever(list[k].hoist, phase < -0.3 ? -1.0 : phase > 0.3 ? 0.6 : 0.0);
+                h.world.setTarget(list[k].slew, 0.3 * std::sin(t / 60.0 * 1.5));
+                h.world.setTarget(list[k].luff, cycle(t, 2.5, -0.1, 0.15));
+            }
+        };
+        return s;
+    }
+
+} // namespace host

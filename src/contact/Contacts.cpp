@@ -47,6 +47,8 @@ namespace hf {
         prep.clear();
         springs.clear();
         grabPreps.clear();
+        ropePreps.clear();
+        ropeStart.clear();
         rowsOfKind[0] = rowsOfKind[1] = 0;
         for (int gi : steppedGroups) {
             Group &g = groups[std::size_t(gi)];
@@ -176,6 +178,8 @@ namespace hf {
             if (b && b->group >= 0 && moves(groups[std::size_t(b->group)]))
                 machineIsland[std::size_t(groups[std::size_t(b->group)].island)] = 1;
         }
+        // And a swept rope, as a loose spring.
+        beginRopes();
         rowStart.assign(L + 1, 0);
         for (ContactData &c : contacts) {
             const Group &a = groups[std::size_t(c.ga)];
@@ -607,6 +611,7 @@ namespace hf {
                 for (int k = 0; k < inner; ++k) {
                     for (int s = part.springBegin; s < part.springEnd; ++s)
                         sweepSpring(*this, springs[std::size_t(springOrder[std::size_t(s)])]);
+                    sweepRopes(int(island), false);
                     if (!grabPreps.empty()) sweepGrabs(int(island));
                     for (int r = part.rowBegin; r < part.rowEnd; ++r) sweepContact(*this, prep[std::size_t(r)], false);
                     flushRuns(*this, false, island_machines, part.machineCount);
@@ -653,7 +658,13 @@ namespace hf {
                 continue;
             }
             const IslandPart part = partOf(*this, island);
-            for (int k = 0; k < kPositionIterations; ++k)
+            const bool ropesHere = !ropeStart.empty() && ropeStart[island + 1] > ropeStart[island];
+            for (int k = 0; k < kPositionIterations; ++k) {
+                // The ropes read their machines' pseudo-velocity directly: what the contacts pushed into it first.
+                if (ropesHere) {
+                    flushRuns(*this, true, machineOrder.data() + part.machineBegin, part.machineCount);
+                    sweepRopes(int(island), true);
+                }
                 for (int r = part.rowBegin; r < part.rowEnd; ++r) {
                     ContactPrep &p = prep[std::size_t(r)];
                     if (p.posBias == 0.0) continue;
@@ -673,6 +684,7 @@ namespace hf {
                     }
                     machineImpulse(*this, p, true, 1, &app);
                 }
+            }
         }
         flushRuns(*this, true);
         if (pass == 1) rigidPositionsOut();

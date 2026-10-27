@@ -33,6 +33,14 @@ namespace hf {
 
         double min = -1.0, max = 1.0; // Slider, Piston and Servo: the course, in m or rad
 
+        // Stops. Hinge, Motor and AngularSpring: the window it turns within, rad from where it was built, inside
+        // -pi..pi. Ball: the cone B's axis swings within, the most it turns off the cone's middle, rad, and that
+        // middle, in A's frame: X opens it round the joint's own axis. Infinite: free.
+        double lowerAngle = -std::numeric_limits<double>::infinity();
+        double upperAngle = std::numeric_limits<double>::infinity();
+        double coneAngle = std::numeric_limits<double>::infinity();
+        Vec3 coneAxis{1.0, 0.0, 0.0};
+
         double hertz = 0.0, damping = 1.0; // Spring and AngularSpring; 0 Hz is a rod, as stiff as a contact
         double restLength = 0.0;           // Spring
     };

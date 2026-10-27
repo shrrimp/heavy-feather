@@ -91,6 +91,17 @@ namespace hf {
                 if (!finite(joints[r.joint])) fault(island, FaultKind::NonFinite, -1, d.b.valid() ? d.b : d.a, int(mi));
             }
         }
+        for (int ri : steppedRopes) {
+            const RopeSlot &r = ropes[std::size_t(ri)];
+            if (r.machine < -1 || (finite(r.force) && finite(r.length) && finite(r.span))) continue;
+            BodyId named;
+            for (const RopePoint &p : r.route)
+                if (const BodySlot *b = body(p.body); b && moves(groups[std::size_t(b->group)])) {
+                    named = p.body;
+                    break;
+                }
+            fault(r.island, FaultKind::NonFinite, -1, named, r.machine);
+        }
         if (!end) return;
         for (const ContactData &c : contacts) {
             if (finite(c)) continue;
@@ -121,6 +132,16 @@ namespace hf {
             if (!faulted(groups[std::size_t(md.groupOfLink[0])])) continue;
             j = s.slot;
             j.lambda = 0.0;
+        }
+        // A rope as the step found it, cold, its sheaves found again from the poses put back.
+        for (int ri : steppedRopes) {
+            RopeSlot &r = ropes[std::size_t(ri)];
+            if (r.island < 0 || std::size_t(r.island) >= islandFaulted.size() || !islandFaulted[std::size_t(r.island)])
+                continue;
+            r.length = r.length0;
+            r.force = r.peak = 0.0;
+            r.slipping = false;
+            r.placed = false;
         }
         // Stored with no impulse, a contact starts cold.
         for (ContactData &c : contacts) {

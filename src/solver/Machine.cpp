@@ -334,8 +334,9 @@ namespace hf {
         }
     }
 
-    void Machine::applyContact(const double *w, double mu) {
-        for (std::size_t i = 0; i < std::size_t(n_); ++i) art.qdot[i] += mu * w[i];
+    void Machine::applyContact(const double *w, double mu, bool pseudo) {
+        std::vector<double> &x = pseudo ? pqdot_ : art.qdot;
+        for (std::size_t i = 0; i < std::size_t(n_); ++i) x[i] += mu * w[i];
     }
 
     void Machine::applyWrench(const double *Z, const Force &f, bool pseudo) {

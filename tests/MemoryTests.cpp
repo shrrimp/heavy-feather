@@ -31,7 +31,7 @@ namespace {
 
 TEST_CASE("a warm step allocates nothing") {
     for (auto build : {+[] { return pile(kSteps > 1 ? 120 : 40); }, +[] { return chain(kSteps > 1 ? 80 : 30); },
-                       +[] { return scissorLift(kSteps > 1 ? 8 : 4); }}) {
+                       +[] { return scissorLift(kSteps > 1 ? 8 : 4); }, +[] { return ropes(kSteps > 1 ? 4 : 2); }}) {
         Scene s = build();
         CAPTURE(s.name);
         for (int i = 0; i < 60 * kSteps; ++i) s.step(i, kDt);

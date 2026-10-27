@@ -65,7 +65,9 @@ namespace hf {
                    rotation(d.frameB.rotation) && std::isfinite(d.target) && nonNegative(d.maxForce, true) &&
                    nonNegative(d.forceSlew, true) && nonNegative(d.speed) && nonNegative(d.hertz) &&
                    nonNegative(d.damping) && nonNegative(d.restLength) && !std::isnan(d.min) && !std::isnan(d.max) &&
-                   d.min <= d.max;
+                   d.min <= d.max && !std::isnan(d.lowerAngle) && !std::isnan(d.upperAngle) &&
+                   d.lowerAngle <= d.upperAngle && nonNegative(d.coneAngle, true) && finite(d.coneAxis) &&
+                   length(d.coneAxis) > 1e-9;
         }
 
         bool usable(const Contact &k) {
@@ -168,6 +170,15 @@ namespace hf {
         }
         for (std::uint32_t k = 0; k < I.grabs.size(); ++k)
             if (I.grabs[k].alive && I.grabs[k].body == id) release({k, I.grabs[k].generation});
+        for (std::uint32_t k = 0; k < I.ropes.size(); ++k) {
+            const RopeSlot &r = I.ropes[k];
+            if (!r.alive) continue;
+            for (const RopePoint &p : r.route)
+                if (p.body == id) {
+                    removeRope({k, r.generation});
+                    break;
+                }
+        }
         // Alone in its group, the group goes with it; its machine, if it was one alone, is rebuilt without it.
         const int g = b->group;
         if (!I.dirty && g > 0 && I.groups[std::size_t(g)].members <= 1) {
@@ -573,6 +584,7 @@ namespace hf {
         WorldStats s = impl_->stats;
         s.bodies = int(impl_->bodies.size() - impl_->freeBodies.size());
         s.joints = int(impl_->joints.size() - impl_->freeJoints.size());
+        s.ropes = int(impl_->ropes.size() - impl_->freeRopes.size());
         return s;
     }
 

@@ -117,22 +117,27 @@ namespace hf {
             g.w *= k;
         }
         updateTurned();
-        if (machinesPass)
+        if (machinesPass) {
+            measureRopes();
             for (int mi : steppedMachines) solveInternal(machines[std::size_t(mi)]);
+        }
         afterPhase(FaultPhase::Internal, i);
         laps.lap(profile.machines);
 
         if (machinesPass) {
             prepareContacts();
             prepareSprings();
+            prepareRopes();
             prepareGrabs();
         } else {
             prepareRigidRows();
         }
         solveContacts();
         afterPhase(FaultPhase::Contacts, i);
-        if (machinesPass)
+        if (machinesPass) {
             for (int mi : steppedMachines) afterContacts(machines[std::size_t(mi)]);
+            afterRopes();
+        }
         afterPhase(FaultPhase::AfterContacts, i);
         laps.lap(profile.contacts);
 
@@ -257,6 +262,7 @@ namespace hf {
         // Nothing has read this step's state yet: an island gone wrong is put back before anything does.
         checkFaults(FaultPhase::EndOfStep);
         if (!faults.empty()) rollBack();
+        endRopes();
         storeContacts();
         carriedRows.clear();
         endSleep();
@@ -272,6 +278,10 @@ namespace hf {
         stats.rigidRows = rowsOfKind[0];
         stats.machineRows = rowsOfKind[1];
         stats.contacts = int(prep.size()) + rowsOfKind[0];
+        for (int ri : steppedRopes) {
+            stats.ropeRows += ropes[std::size_t(ri)].machine >= 0;
+            stats.sweptRopes += ropes[std::size_t(ri)].machine == -1;
+        }
         stats.machines = int(machines.size());
         for (const MachineData &md : machines) {
             stats.links += int(md.groupOfLink.size());

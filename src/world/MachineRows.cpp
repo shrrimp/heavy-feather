@@ -36,11 +36,23 @@ namespace hf {
             kLimLo = 11,
             kLimHi = 12,
             kSpring = 13,
+            kStopLo = 14,
+            kStopHi = 15,
+            kCone = 16,
             kPosBase = 32,
         };
 
+        // The joints that turn about one axis, and may have a window to turn in.
+        bool hinged(JointType t) { return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring; }
+
         std::uint64_t tagOf(const JointSlot &j, std::uint32_t index, std::uint64_t slot) {
             return (std::uint64_t(j.generation) << 40) | (std::uint64_t(index) << 8) | slot;
+        }
+
+        // A rope's rows, in a space of their own: no joint's or grab's tag has the top bit.
+        std::uint64_t tagOf(const RopeSlot &r, std::size_t index, std::uint64_t slot) {
+            return (std::uint64_t(1) << 63) | (std::uint64_t(r.generation & 0x3fffffu) << 40) |
+                   (std::uint64_t(index) << 8) | slot;
         }
 
     } // namespace
@@ -114,8 +126,34 @@ namespace hf {
             md.m.art.addAngularRow(r.linkA, u, -scale, J);
         }
 
+        // Stops at lo and hi on a joint coordinate `pos`, its rate row added by `rate`: within kLimitSlop of either, a
+        // row that only pushes off it, arriving on it no faster than a step can take back.
+        template <class Rate>
+        void stopRows(const JointRef &r, double pos, double lo, double hi, std::uint64_t slotLo, std::uint64_t slotHi,
+                      Rate &&rate) {
+            const JointSlot &j = I.joints[r.joint];
+            const double gap[2] = {pos - lo, hi - pos};
+            for (int i = 0; i < 2; ++i) {
+                if (gap[i] >= kLimitSlop) continue;
+                MachineRow row;
+                row.lo = 0.0;
+                row.hi = kInf;
+                const double dir = i == 0 ? 1.0 : -1.0;
+                const std::uint64_t slot = i == 0 ? slotLo : slotHi;
+                if (position()) {
+                    if (gap[i] >= 0.0) continue; // nothing to correct until it is past
+                    row.target = std::min(-(kJointBeta / I.h) * gap[i], kMaxPosBias);
+                    rate(dir, add(row, tagOf(j, r.joint, kPosBase + slot), gap[i]));
+                } else {
+                    row.target = gap[i] > 0.0 ? -gap[i] / I.h : 0.0; // arrive on the stop, no faster
+                    rate(dir, add(row, tagOf(j, r.joint, slot), 0.0));
+                }
+            }
+        }
+
         void closureRows(const JointRef &r);
         void actuatorRows(std::size_t ri);
+        void ropeRows();
     };
 
     // A cut joint's equalities.
@@ -235,26 +273,25 @@ namespace hf {
                     rateRow(1.0, add(row, tagOf(j, r.joint, kDrive), 0.0));
                 }
             }
-            // Course limits, within kLimitSlop of their stop. Left out while an unbounded drive owns the axis: its
-            // target is held to the course, so the two would be the same row.
-            if (!driveUnbounded) {
-                const double gap[2] = {pos - d.min, d.max - pos};
-                for (int i = 0; i < 2; ++i) {
-                    if (gap[i] >= kLimitSlop) continue;
-                    MachineRow row;
-                    row.lo = 0.0;
-                    row.hi = kInf;
-                    const double dir = i == 0 ? 1.0 : -1.0;
-                    const std::uint64_t slot = i == 0 ? kLimLo : kLimHi;
-                    if (position()) {
-                        if (gap[i] >= 0.0) continue; // nothing to correct until it is past
-                        row.target = std::min(-(kJointBeta / h) * gap[i], kMaxPosBias);
-                        rateRow(dir, add(row, tagOf(j, r.joint, kPosBase + slot), gap[i]));
-                    } else {
-                        row.target = gap[i] > 0.0 ? -gap[i] / h : 0.0; // arrive on the stop, no faster
-                        rateRow(dir, add(row, tagOf(j, r.joint, slot), 0.0));
-                    }
-                }
+            // Course limits. Left out while an unbounded drive owns the axis: its target is held to the course, so
+            // the two would be the same row.
+            if (!driveUnbounded) stopRows(r, pos, d.min, d.max, kLimLo, kLimHi, rateRow);
+        }
+
+        // A hinge's window, and a ball's cone: B's axis swinging off A's, about the line square to both.
+        if (hinged(d.type) && (std::isfinite(d.lowerAngle) || std::isfinite(d.upperAngle)))
+            stopRows(r, hingeAngle(r), d.lowerAngle, d.upperAngle, kStopLo, kStopHi,
+                     [&](double scale, double *J) { hingeRateRow(r, scale, J); });
+        if (d.type == JointType::Ball && std::isfinite(d.coneAngle)) {
+            const Vec3 xA = endFrame(r.A, r.linkA) * normalize(d.coneAxis), xB = endFrame(r.B, r.linkB) * kX;
+            const Vec3 n = cross(xA, xB);
+            const double s = length(n);
+            if (s > 1e-9) {
+                const Vec3 u = n / s;
+                stopRows(r, std::atan2(s, dot(xA, xB)), -kInf, d.coneAngle, kCone, kCone, [&](double scale, double *J) {
+                    m.art.addAngularRow(r.linkB, u, scale, J);
+                    m.art.addAngularRow(r.linkA, u, -scale, J);
+                });
             }
         }
 
@@ -285,6 +322,49 @@ namespace hf {
                 double *dst = add(row, tagOf(j, r.joint, kSpring), 0.0);
                 std::copy(J.begin(), J.end(), dst);
             }
+        }
+    }
+
+    // The ropes the machine holds with its joints (Ropes.cpp): one row each on the slack, pulling every point of the
+    // route on its links at once. What doesn't move with the machine is read: a kinematic end's motion is part of the
+    // target. A rigid rope is pulled back in the position pass when stretched, and scored by the line search.
+    void RowBuilder::ropeRows() {
+        Machine &m = md.m;
+        const double h = I.h;
+        const MachineData *self = &md;
+        for (int ri : md.ropes) {
+            RopeSlot &r = I.ropes[std::size_t(ri)];
+            const bool rigid = !std::isfinite(r.desc.stiffness);
+            if (mode == Mode::Measure) {
+                const double s = r.length - I.ropeSpanIn(r, md);
+                if (rigid && s < 0.0) add(MachineRow{}, 0, -s);
+                continue;
+            }
+            if (position() && !rigid) continue;
+            std::vector<double> &J = md.row;
+            J.assign(std::size_t(m.dofs()), 0.0);
+            double read = 0.0; // the slack's rate from what moves on its own
+            for (const RopeBendState &b : r.bends) {
+                if (!b.touching || b.dir == Vec3{}) continue;
+                const Group &g = I.groups[std::size_t(b.group)];
+                if (g.machine >= 0 && !g.frozen && &I.machines[std::size_t(g.machine)] == self)
+                    m.art.addPointRow(g.link, b.p, b.dir, -1.0, J.data());
+                else if (!position()) read -= dot(b.dir, g.v + cross(g.w, b.p - g.c));
+            }
+            MachineRow row;
+            row.lo = 0.0;
+            if (position()) {
+                row.target = positionTarget(r, h);
+                std::copy(J.begin(), J.end(), add(row, tagOf(r, std::size_t(ri), kPosBase), 0.0));
+                continue;
+            }
+            row.hi = r.cap * h;
+            ropeSlackRow(r, m.inverseMassAlong(J.data()), h, row.compliance, row.target);
+            row.target -= read;
+            // A rigid rope's row needs no compliance beyond what every row gets.
+            if (rigid) row.compliance = 0.0;
+            r.row = m.rowCount();
+            std::copy(J.begin(), J.end(), add(row, tagOf(r, std::size_t(ri), 0), 0.0));
         }
     }
 
@@ -336,6 +416,7 @@ namespace hf {
             md.errors.clear();
             RowBuilder rb{I, md, RowBuilder::Mode::Measure};
             addJointRows(rb);
+            rb.ropeRows();
             double s = 0.0;
             for (double c : md.errors) s += c * c;
             return s;
@@ -410,6 +491,7 @@ namespace hf {
         md.driveRow.assign(md.joints.size(), -1);
         RowBuilder rb{*this, md, RowBuilder::Mode::Velocity};
         addJointRows(rb);
+        rb.ropeRows();
         grabRows(md);
         contactRows(md);
         m.prepareRows();
@@ -419,6 +501,7 @@ namespace hf {
         m.buildMobility();
         m.prepareBounded();
         recordDrives(*this, md);
+        recordRopes(md);
         writeVelocities(md);
     }
 
@@ -427,6 +510,7 @@ namespace hf {
         md.posTags.clear();
         RowBuilder rb{*this, md, RowBuilder::Mode::Position};
         addJointRows(rb);
+        rb.ropeRows();
         contactPositionRows(md);
         warmRows(*this, md.lastPos, md.posState, md.posTags);
         md.m.solvePositions(md.posState);
@@ -435,6 +519,7 @@ namespace hf {
 
     void World::Impl::afterContacts(MachineData &md) {
         recordDrives(*this, md);
+        recordRopes(md);
         recordContacts(md);
         writeVelocities(md);
     }

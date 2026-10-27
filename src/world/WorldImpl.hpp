@@ -57,6 +57,7 @@ namespace hf {
         std::vector<int> response;
         // The contacts it solves with its joints: between two of its links, or one and the static world.
         std::vector<int> contacts;
+        std::vector<int> ropes; // the ropes it solves with its joints: every moving point of theirs is one of its links
         double correction = 0.0; // how far the position pass moved its links in the last sub-step, at most
         bool frozen = false;     // asleep this step, every link of it
 
@@ -160,6 +161,25 @@ namespace hf {
         ContactBlock blocks[2];
     };
 
+    // A swept rope's row on one group that isn't a machine link: how its velocity and spin make the slack shrink (J,
+    // summed over the rope's points on it) and, for a moving group it writes, what an impulse does to them.
+    struct RopeEnd {
+        int group = 0;
+        Vec3 lin{}, ang{};
+        Vec3 imLin{}, imAng{};
+        bool write = false;
+    };
+
+    // Ropes.cpp: a rope that isn't inside one machine, this sub-step: one row, J v + gamma λ = target with
+    // 0 <= λ <= hi, J v the rate its slack grows by the bodies' motion. Its rigid groups in ropeEnds, its machines (g then W g in the
+    // arena) in ropeBlocks. The ropes of an island are solved together, exactly: see sweepRopes.
+    struct RopePrep {
+        int rope = 0, island = 0;
+        int endBegin = 0, endCount = 0, blockBegin = 0, blockCount = 0;
+        double k = 0.0, gamma = 0.0, target = 0.0, hi = 0.0, lambda = 0.0;
+        double posTarget = 0.0, pseudo = 0.0; // its position row, a stretched rope without a spring
+    };
+
     // RigidRows.cpp: what a rigid island's contact rows push. A body that moves this step gets its own slot, and
     // anything else they touch (the ground, a sleeper, a kinematic body) a slot that is only ever read.
     struct SolverBody {
@@ -233,6 +253,11 @@ namespace hf {
         bool operator<(const WarmStart &o) const { return key < o.key; }
     };
 
+    // Ropes.cpp: a rigid rope's position row target, and any rope's velocity row (gamma, target) for an effective
+    // inverse mass k, J v the rate its slack grows by the bodies' motion.
+    double positionTarget(const RopeSlot &r, double h);
+    void ropeSlackRow(const RopeSlot &r, double k, double h, double &gamma, double &target);
+
     // MachineSides.cpp: a contact's machine sides. The rows are n, t1, t2 and then the turn rows r1, r2, s; velocities
     // add into v, impulses come in l. pseudo picks the position pass's pseudo-velocity over the velocity. Anything
     // that reads or writes a machine's velocity directly must flush the runs first.
@@ -248,7 +273,8 @@ namespace hf {
         std::vector<JointSlot> joints;
         std::vector<GrabSlot> grabs;
         std::vector<GrabPrep> grabPreps;
-        std::vector<std::uint32_t> freeBodies, freeJoints, freeGrabs;
+        std::vector<RopeSlot> ropes;
+        std::vector<std::uint32_t> freeBodies, freeJoints, freeGrabs, freeRopes;
         std::vector<Group> groups; // 0: the world
         std::vector<MachineData> machines;
         std::vector<JointRef> looseSprings; // springs not inside one machine, solved in the contact sweep
@@ -262,6 +288,20 @@ namespace hf {
         std::vector<ContactData> contacts;
         std::vector<ContactPrep> prep;
         std::vector<SpringPrep> springs;
+        // Ropes.cpp: this step's stepped ropes, and the swept ones' rows this sub-step, island by island (ropeStart).
+        std::vector<int> steppedRopes;
+        std::vector<RopePrep> ropePreps;
+        std::vector<RopeEnd> ropeEnds;
+        std::vector<ContactBlock> ropeBlocks;
+        std::vector<RopePrep> ropeSorted;
+        std::vector<int> ropeStart;
+        std::vector<std::size_t> ropeBlockStart; // per island, into ropeS: its ropes' couplings, n × n
+        std::vector<double> ropeS;
+        std::vector<double> ropeA, ropeB, ropeLo, ropeHi, ropeX, ropeV; // an island's rope block, being solved
+        std::vector<RopeBendState> ropeScratch;
+        std::vector<RowState> ropeState;
+        BoxLcpScratch ropeLcp;
+        std::vector<RopeId> brokenRopes; // the last step's
         std::vector<double> arena;
         std::vector<LinkResponse> responses;
         std::vector<double> responseArena;
@@ -330,6 +370,8 @@ namespace hf {
         const BodySlot *body(BodyId id) const;
         JointSlot *joint(JointId id);
         const JointSlot *joint(JointId id) const;
+        RopeSlot *rope(RopeId id);
+        const RopeSlot *rope(RopeId id) const;
         double jointPosition(const JointSlot &j) const; // from the bodies' poses
         double jointVelocity(const JointSlot &j) const; // from the bodies' velocities
         // A joint's frame on a body in the world, and how it moves: its point's velocity, its angular velocity.
@@ -381,6 +423,18 @@ namespace hf {
         void restitution();
         void storeContacts();
         void keepResting(); // once the step is done: contacts left between sleepers stay in the world
+
+        // Ropes.cpp
+        void beginRopes(); // once a step, in beginContacts: which are stepped, and how each is solved
+        void layRope(RopeSlot &r); // as it lies: its bends and its span
+        void measureRopes();       // each sub-step, before the machines' solves: the ropes as they lie
+        void prepareRopes(); // the swept ones' rows, after the springs'
+        void sweepRopes(int island, bool pseudo);
+        void recordRopes(MachineData &md); // the rows its solve held, read back
+        void afterRopes();                 // each sub-step, its velocities solved: the spools' length
+        void endRopes();                   // once the step is done: peaks, breaks
+        void wakeRope(const RopeSlot &r);
+        double ropeSpanIn(const RopeSlot &r, const MachineData &md); // with md's links where the line search put them
 
         // RigidRows.cpp
         void beginRigidRows();             // once a step, after beginContacts

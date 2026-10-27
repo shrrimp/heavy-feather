@@ -79,8 +79,9 @@ namespace hf {
         // moves the machine by Σ ψ_c Z_c, its own twist by held ψ, and every contact on one link shares one solve.
         void linkResponse(int link, double *Z, double held[6][6], double unheld[6][6]) const;
 
-        // Applies an impulse of size mu along a generalised direction g, given w = W g.
-        void applyContact(const double *w, double mu);
+        // Applies an impulse of size mu along a generalised direction g, given w = W g: to the velocity, or to the
+        // position pass's pseudo-velocity.
+        void applyContact(const double *w, double mu, bool pseudo = false);
         // Adds Σ f_c Z_c to the velocity, or to the pseudo-velocity: a wrench at a link, through its response.
         void applyWrench(const double *Z, const Force &f, bool pseudo);
 

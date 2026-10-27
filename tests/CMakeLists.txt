@@ -34,8 +34,10 @@ set(HF_TEST_SOURCES
   MechanismTests.cpp
   MemoryTests.cpp
   RestingTests.cpp
+  RopeTests.cpp
   SleepTests.cpp
   SpatialTests.cpp
+  StopTests.cpp
   StressTests.cpp
   VersionTests.cpp
   WorldTests.cpp)
