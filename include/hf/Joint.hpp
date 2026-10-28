@@ -19,6 +19,10 @@ namespace hf {
         Servo,         // a hinge driven to an angle
     };
 
+    // m/s or rad/s along a joint's coordinate: a stop struck slower than this doesn't bounce, so one resting on it, or
+    // pushed into it, settles.
+    inline constexpr double kStopBounceSpeed = 0.5;
+
     struct JointDesc {
         JointType type = JointType::Hinge;
         BodyId a, b;          // one may be invalid: the world, whose frame is then in world coordinates
@@ -40,6 +44,10 @@ namespace hf {
         double upperAngle = std::numeric_limits<double>::infinity();
         double coneAngle = std::numeric_limits<double>::infinity();
         Vec3 coneAxis{1.0, 0.0, 0.0};
+        // How a stop -- its window's ends, its cone, a slider's course -- sends back what strikes it: the share of the
+        // speed it struck at it leaves with, 0 dead to 1 elastic, [0, 1]. Struck slower than kStopBounceSpeed, a stop
+        // holds without a bounce. Its impulse is a row's between the two bodies, so the other takes its share.
+        double bounce = 0.0;
 
         double hertz = 0.0, damping = 1.0; // Spring and AngularSpring; 0 Hz is a rod, as stiff as a contact
         double restLength = 0.0;           // Spring

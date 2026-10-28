@@ -45,6 +45,11 @@ namespace hf {
         // The joints that turn about one axis, and may have a window to turn in.
         bool hinged(JointType t) { return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring; }
 
+        // A stop's place among a joint's (JointSlot::stops): course, window, cone.
+        int stopIndex(std::uint64_t slot) {
+            return slot == kLimLo ? 0 : slot == kLimHi ? 1 : slot == kStopLo ? 2 : slot == kStopHi ? 3 : 4;
+        }
+
         std::uint64_t tagOf(const JointSlot &j, std::uint32_t index, std::uint64_t slot) {
             return (std::uint64_t(j.generation) << 40) | (std::uint64_t(index) << 8) | slot;
         }
@@ -127,11 +132,12 @@ namespace hf {
         }
 
         // Stops at lo and hi on a joint coordinate `pos`, its rate row added by `rate`: within kLimitSlop of either, a
-        // row that only pushes off it, arriving on it no faster than a step can take back.
+        // row that only pushes off it, arriving on it no faster than a step can take back. Each kept with the speed
+        // it is coming at, what a bounce off it is measured by.
         template <class Rate>
         void stopRows(const JointRef &r, double pos, double lo, double hi, std::uint64_t slotLo, std::uint64_t slotHi,
                       Rate &&rate) {
-            const JointSlot &j = I.joints[r.joint];
+            JointSlot &j = I.joints[r.joint];
             const double gap[2] = {pos - lo, hi - pos};
             for (int i = 0; i < 2; ++i) {
                 if (gap[i] >= kLimitSlop) continue;
@@ -146,7 +152,18 @@ namespace hf {
                     rate(dir, add(row, tagOf(j, r.joint, kPosBase + slot), gap[i]));
                 } else {
                     row.target = gap[i] > 0.0 ? -gap[i] / I.h : 0.0; // arrive on the stop, no faster
-                    rate(dir, add(row, tagOf(j, r.joint, slot), 0.0));
+                    // Struck hard the sub-step before, it leaves at its bounce: asked here, beside every other row.
+                    JointSlot::Stop &s = j.stops[stopIndex(slot)];
+                    if (mode == Mode::Velocity && s.leave > 0.0) row.target = std::max(row.target, s.leave);
+                    double *J = add(row, tagOf(j, r.joint, slot), 0.0);
+                    rate(dir, J);
+                    if (mode == Mode::Velocity) {
+                        s.row = md.m.rowCount() - 1;
+                        s.leave = 0.0;
+                        double v = 0.0;
+                        for (int k = 0; k < md.m.dofs(); ++k) v += J[k] * md.m.art.qdot[std::size_t(k)];
+                        s.approach = -v;
+                    }
                 }
             }
         }
@@ -216,7 +233,14 @@ namespace hf {
         JointSlot &j = I.joints[r.joint];
         const JointDesc &d = j.desc;
         const double h = I.h;
-        if (mode == Mode::Velocity) md.driveRow[ri] = -1;
+        if (mode == Mode::Velocity) {
+            md.driveRow[ri] = -1;
+            // A stop not reached this sub-step has no row, and nothing to leave by.
+            for (JointSlot::Stop &s : j.stops) {
+                if (s.row < 0) s.leave = 0.0;
+                s.row = -1;
+            }
+        }
 
         if (d.type == JointType::Motor && mode == Mode::Velocity) {
             // The force cap, and a ceiling on how fast the force may grow: release stays free.
@@ -403,6 +427,21 @@ namespace hf {
             }
         }
 
+        // A stop that began to hold this sub-step was struck at the speed it was coming at: struck harder than
+        // kStopBounceSpeed, it sends its joint back at its bounce times that, the next sub-step.
+        void recordStops(World::Impl &I, MachineData &md) {
+            const std::vector<double> &lambda = md.m.lambda();
+            for (const JointRef &r : md.joints) {
+                JointSlot &j = I.joints[r.joint];
+                const double e = std::clamp(j.desc.bounce, 0.0, 1.0);
+                for (JointSlot::Stop &s : j.stops) {
+                    const bool holds = s.row >= 0 && std::size_t(s.row) < lambda.size() && lambda[std::size_t(s.row)] > 0.0;
+                    if (holds && !s.holding && s.approach > kStopBounceSpeed) s.leave = e * s.approach;
+                    s.holding = holds;
+                }
+            }
+        }
+
         void addJointRows(RowBuilder &rb) {
             for (std::size_t ri = 0; ri < rb.md.joints.size(); ++ri) {
                 const JointRef &r = rb.md.joints[ri];
@@ -519,6 +558,7 @@ namespace hf {
 
     void World::Impl::afterContacts(MachineData &md) {
         recordDrives(*this, md);
+        recordStops(*this, md);
         recordRopes(md);
         recordContacts(md);
         writeVelocities(md);

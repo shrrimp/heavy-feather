@@ -58,6 +58,16 @@ namespace hf {
         double holdPos = 0.0, driveSat = 0.0;
         double lever = 0.0, leverPrev = 0.0;
         bool locked = false, latchPending = true, commanded = true;
+
+        // ITS STOPS: each one's row in the last sub-step's solve (-1: not near it), the speed it came at as that
+        // sub-step began, whether it held, and, struck hard, the speed it is to leave at in the next sub-step: its
+        // bounce, asked of its row there. Course low and high, window low and high, cone.
+        struct Stop {
+            int row = -1;
+            double approach = 0.0, leave = 0.0;
+            bool holding = false;
+        };
+        Stop stops[5];
     };
 
     struct GrabSlot {

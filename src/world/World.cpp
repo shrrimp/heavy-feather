@@ -67,7 +67,7 @@ namespace hf {
                    nonNegative(d.damping) && nonNegative(d.restLength) && !std::isnan(d.min) && !std::isnan(d.max) &&
                    d.min <= d.max && !std::isnan(d.lowerAngle) && !std::isnan(d.upperAngle) &&
                    d.lowerAngle <= d.upperAngle && nonNegative(d.coneAngle, true) && finite(d.coneAxis) &&
-                   length(d.coneAxis) > 1e-9;
+                   length(d.coneAxis) > 1e-9 && nonNegative(d.bounce) && d.bounce <= 1.0;
         }
 
         bool usable(const Contact &k) {

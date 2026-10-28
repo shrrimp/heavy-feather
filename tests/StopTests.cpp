@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <vector>
 
 #include <doctest/doctest.h>
 
@@ -298,4 +299,153 @@ TEST_CASE("stops that are not a window or a cone are refused") {
     j.coneAngle = 0.4;
     j.coneAxis = Vec3{};
     CHECK_MESSAGE(!w.setJoint(ok, j), "a cone with no middle to open round");
+}
+
+namespace {
+
+    // The arm afloat, no gravity, spun about its hinge toward the upper end of its window at `spin` rad/s: how fast it
+    // turns once it has struck, the first step its turn is no longer the way it came, or where it is after 4 s.
+    double struckArm(double bounce, double spin) {
+        WorldSettings settings;
+        settings.gravity = Vec3{};
+        World w(settings);
+        const Arm a = armOn(w, JointType::Hinge, -0.5, 0.8);
+        JointDesc d = w.jointDesc(a.joint);
+        d.bounce = bounce;
+        w.setJoint(a.joint, d);
+        w.setVelocity(a.rod, Vec3{0, spin, 0}, Vec3{0, 0, spin});
+        for (int s = 0; s < 240; ++s) {
+            w.step(kDt);
+            const double rate = w.angularVelocity(a.rod).z;
+            if (rate < spin * 0.5) return rate;
+        }
+        return w.angularVelocity(a.rod).z;
+    }
+
+} // namespace
+
+TEST_CASE("a hinge struck hard against the end of its window comes back off it by its bounce") {
+    CHECK_MESSAGE(std::fabs(struckArm(0.0, 3.0)) < 1e-3, "no bounce: it stops dead on its stop, as ever");
+    CHECK_MESSAGE(std::fabs(struckArm(0.6, 3.0) + 0.6 * 3.0) < 0.03,
+                  "bounce 0.6: it leaves the stop at 0.6 of the 3 rad/s it struck at");
+    CHECK_MESSAGE(std::fabs(struckArm(1.0, 3.0) + 3.0) < 0.05, "bounce 1: it leaves at the speed it struck at");
+}
+
+TEST_CASE("a stop struck slower than kStopBounceSpeed holds without a bounce") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const Arm a = armOn(w, JointType::Hinge, -0.5, 0.8);
+    JointDesc d = w.jointDesc(a.joint);
+    d.bounce = 1.0;
+    w.setJoint(a.joint, d);
+    const double spin = 0.6 * kStopBounceSpeed;
+    w.setVelocity(a.rod, Vec3{0, spin, 0}, Vec3{0, 0, spin});
+    run(w, 3.5);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(a.joint) - 0.8) < 2e-3, "it reaches its stop");
+    CHECK_MESSAGE(std::fabs(w.angularVelocity(a.rod).z) < 1e-3, "and stays on it, even at a full bounce");
+}
+
+TEST_CASE("a stop's bounce is between the two: a free pair keeps its spin, and turns apart by it") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const BodyId a = rodBetween(w, Vec3{0, 0, 0}, Vec3{1.5, 0, 0}, 15.0);
+    const BodyId b = rodBetween(w, Vec3{1.5, 0, 0}, Vec3{3, 0, 0}, 10.0);
+    JointDesc j = jointAt(w, JointType::Hinge, a, b, Vec3{1.5, 0, 0}, kZ);
+    j.lowerAngle = -0.4;
+    j.upperAngle = 0.4;
+    j.bounce = 0.6;
+    const JointId joint = w.addJoint(j);
+    w.setVelocity(b, Vec3{0, 0.75 * 2.5, 0}, Vec3{0, 0, 2.5});
+    const auto spinOf = [&] {
+        const double mass[2] = {15.0, 10.0};
+        const BodyId bodies[2] = {a, b};
+        Vec3 c{}, p{};
+        for (int i = 0; i < 2; ++i) {
+            c += mass[i] * w.position(bodies[i]);
+            p += mass[i] * w.velocity(bodies[i]);
+        }
+        c = c / 25.0;
+        const Vec3 v = p / 25.0;
+        Vec3 L{};
+        for (int i = 0; i < 2; ++i) {
+            const Mat3 R = toMat3(w.orientation(bodies[i]));
+            const Mat3 I = R * boxInertia(mass[i], Vec3{0.75, 0.1, 0.1}) * transpose(R);
+            L += I * w.angularVelocity(bodies[i]) + mass[i] * cross(w.position(bodies[i]) - c, w.velocity(bodies[i]) - v);
+        }
+        return L;
+    };
+    const Vec3 L0 = spinOf();
+    double before = 0.0, after = 0.0, last = w.jointPosition(joint);
+    bool struck = false;
+    for (int s = 0; s < 120; ++s) {
+        w.step(kDt);
+        const double now = w.jointPosition(joint), rate = (now - last) / kDt;
+        if (!struck && rate > 0.0) before = rate;
+        if (!struck && rate < 0.0) struck = true;
+        if (struck && after == 0.0 && rate < 0.0 && s > 0) after = w.angularVelocity(b).z - w.angularVelocity(a).z;
+        last = now;
+    }
+    CHECK_MESSAGE(struck, "the pair turns into the stop and back off it");
+    CHECK_MESSAGE(length(spinOf() - L0) < 1e-3 * length(L0), "and what it turns with as a whole is what it was, to 0.1%");
+    CHECK_MESSAGE(after < 0.0, "turning apart after it");
+    CHECK_MESSAGE(std::fabs(-after / before - 0.6) < 0.06, "at 0.6 of what it turned together at");
+}
+
+TEST_CASE("a ball's cone and a slider's course bounce too") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    // The cone: a rod on a ball to the world, swung into a 0.35 rad cone at 2 rad/s.
+    {
+        World w(settings);
+        const Pendulum p = pendulum(w, 0.35, 2.0);
+        JointDesc d = w.jointDesc(p.ball);
+        d.bounce = 0.6;
+        w.setJoint(p.ball, d);
+        // Stepped until it swings back from the cone, and a few steps on.
+        double widest = 0.0, back = 0.0;
+        int steps = 0;
+        for (; steps < 120 && !(widest > 0.3 && swing(w, p) < widest - 0.02); ++steps) {
+            w.step(kDt);
+            widest = std::max(widest, swing(w, p));
+        }
+        back = length(w.angularVelocity(p.rod));
+        CHECK_MESSAGE(widest < 0.35 + 0.01, "the cone still holds it");
+        CHECK_MESSAGE(widest > 0.34, "it swings into it");
+        CHECK_MESSAGE(std::fabs(back - 0.6 * 2.0) < 0.06, "and is sent back at 0.6 of the 2 rad/s it swung in at");
+    }
+    // The course: a block on a slider to the world, slid at 2 m/s into the end of its 0.5 m course.
+    {
+        World w(settings);
+        BodyDesc bd;
+        bd.mass = 10.0;
+        bd.inertia = boxInertia(10.0, Vec3{0.2, 0.2, 0.2});
+        const BodyId block = w.addBody(bd);
+        JointDesc j = jointAt(w, JointType::Slider, BodyId{}, block, Vec3{0, 0, 0}, Vec3{1, 0, 0});
+        j.min = -0.5;
+        j.max = 0.5;
+        j.bounce = 0.6;
+        w.addJoint(j);
+        w.setVelocity(block, Vec3{2.0, 0, 0}, Vec3{});
+        run(w, 0.5);
+        CHECK_MESSAGE(std::fabs(w.velocity(block).x + 0.6 * 2.0) < 0.03, "it comes back off its end at 0.6 of 2 m/s");
+        CHECK_MESSAGE(w.position(block).x < 0.5 + 0.01, "having never gone past it");
+    }
+}
+
+TEST_CASE("a bounce outside 0..1 is refused") {
+    World w;
+    const BodyId rod = rodBetween(w, Vec3{0, 0, 0}, Vec3{2, 0, 0}, 20.0);
+    JointDesc j = jointAt(w, JointType::Hinge, BodyId{}, rod, Vec3{0, 0, 0}, kZ);
+    j.lowerAngle = -0.5;
+    j.upperAngle = 0.5;
+    j.bounce = -0.1;
+    CHECK_MESSAGE(!w.addJoint(j).valid(), "less than none");
+    j.bounce = 1.5;
+    CHECK_MESSAGE(!w.addJoint(j).valid(), "more than all");
+    j.bounce = std::nan("");
+    CHECK_MESSAGE(!w.addJoint(j).valid(), "not a number");
+    j.bounce = 0.6;
+    CHECK_MESSAGE(w.addJoint(j).valid(), "0.6 is a bounce");
 }
