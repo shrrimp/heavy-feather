@@ -233,6 +233,43 @@ namespace hf {
         newlyKept.clear();
     }
 
+    // An impulse over the sub-step it was solved in: a machine island's, or a rigid island's at its own count. One the
+    // world keeps between sleepers was solved in the island its ends were last stepped in.
+    void World::Impl::gatherPushes() {
+        pushes.clear();
+        pushesFresh = true;
+        if (!(stepDt > 0.0)) return;
+        const double hMachine = stepDt / std::max(1, settings.substeps);
+        const double hRigid = settings.rigidSubsteps > 0 ? stepDt / settings.rigidSubsteps : hMachine;
+        const auto push = [&](const ContactData &c, bool machine) {
+            const double inv = 1.0 / (machine ? hMachine : hRigid);
+            const Vec3 &n = c.in.normal;
+            Vec3 t1, t2;
+            contactBasis(n, t1, t2);
+            pushes.push_back({c.in.a, c.in.b, c.in.point, inv * (c.ln * n + c.lt1 * t1 + c.lt2 * t2),
+                              inv * (c.lr1 * t1 + c.lr2 * t2 + c.ls * n)});
+        };
+        const auto onMachine = [&](const ContactData &c) {
+            for (BodyId id : {c.in.a, c.in.b})
+                if (const BodySlot *b = body(id); b && b->group >= 0 && groups[std::size_t(b->group)].machine >= 0)
+                    return true;
+            return false;
+        };
+        // One whose ends all came to rest this step is in the world's keeping already.
+        const auto resting = [&](BodyId id) {
+            const BodySlot *b = body(id);
+            if (!b || b->group < 0) return true;
+            const Group &g = groups[std::size_t(b->group)];
+            return b->asleep || (g.isStatic && !g.kinematic);
+        };
+        for (const ContactData &c : contacts) {
+            if (resting(c.in.a) && resting(c.in.b)) continue;
+            const bool known = c.island >= 0 && std::size_t(c.island) < machineIsland.size();
+            push(c, known ? machineIsland[std::size_t(c.island)] != 0 : onMachine(c));
+        }
+        for (const ContactData &c : kept) push(c, onMachine(c));
+    }
+
     // The warm start for the next step. Only this step's contacts are kept, so the cache can't grow.
     void World::Impl::storeContacts() {
         warm.clear();

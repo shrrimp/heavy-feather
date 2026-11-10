@@ -260,7 +260,7 @@ namespace hf {
 
         if (positionDrive(d.type) || d.type == JointType::Slider) {
             const bool turns = d.type == JointType::Servo;
-            const double pos = turns ? hingeAngle(r) : sliderPos(r);
+            const double pos = turns ? turnedAs(d, hingeAngle(r)) : sliderPos(r);
             const auto rateRow = [&](double scale, double *J) {
                 if (turns) hingeRateRow(r, scale, J);
                 else sliderRateRow(r, scale, J);
@@ -287,7 +287,8 @@ namespace hf {
                     // A servo with a finite flow, not a teleport: inside the deadband it corrects at kServoRate, so
                     // twin cylinders only nudge each other; outside, at its own speed.
                     row.relEps = kServoYield;
-                    const double e = turns ? std::remainder(pos - want, 2.0 * std::numbers::pi) : pos - want;
+                    // Measured inside its course, so it never turns the short way through where it may not go.
+                    const double e = pos - want;
                     const double cap = std::fabs(e) > kServoDeadband ? std::max(d.speed, kServoRate) : kServoRate;
                     row.target = std::clamp(-(kJointBeta / h) * e, -cap, cap);
                     rateRow(1.0, add(row, tagOf(j, r.joint, kPosBase + kDrive), e));
@@ -304,7 +305,7 @@ namespace hf {
 
         // A hinge's window, and a ball's cone: B's axis swinging off A's, about the line square to both.
         if (hinged(d.type) && (std::isfinite(d.lowerAngle) || std::isfinite(d.upperAngle)))
-            stopRows(r, hingeAngle(r), d.lowerAngle, d.upperAngle, kStopLo, kStopHi,
+            stopRows(r, turnedAs(d, hingeAngle(r)), d.lowerAngle, d.upperAngle, kStopLo, kStopHi,
                      [&](double scale, double *J) { hingeRateRow(r, scale, J); });
         if (d.type == JointType::Ball && std::isfinite(d.coneAngle)) {
             const Vec3 xA = endFrame(r.A, r.linkA) * normalize(d.coneAxis), xB = endFrame(r.B, r.linkB) * kX;

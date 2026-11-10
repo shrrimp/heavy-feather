@@ -60,13 +60,19 @@ namespace hf {
         // At or above zero, and a number; infinite only where infinite means no limit.
         bool nonNegative(double x, bool infinite = false) { return x >= 0.0 && (infinite || std::isfinite(x)); }
 
+        // A turning window, no more than a whole turn wide; open at an end, any.
+        bool withinTurn(double lo, double hi) {
+            return !std::isfinite(lo) || !std::isfinite(hi) || hi - lo <= 2.0 * std::numbers::pi + 1e-9;
+        }
+
         bool usable(const JointDesc &d) {
             return finite(d.frameA.position) && rotation(d.frameA.rotation) && finite(d.frameB.position) &&
                    rotation(d.frameB.rotation) && std::isfinite(d.target) && nonNegative(d.maxForce, true) &&
                    nonNegative(d.forceSlew, true) && nonNegative(d.speed) && nonNegative(d.hertz) &&
                    nonNegative(d.damping) && nonNegative(d.restLength) && !std::isnan(d.min) && !std::isnan(d.max) &&
                    d.min <= d.max && !std::isnan(d.lowerAngle) && !std::isnan(d.upperAngle) &&
-                   d.lowerAngle <= d.upperAngle && nonNegative(d.coneAngle, true) && finite(d.coneAxis) &&
+                   d.lowerAngle <= d.upperAngle && withinTurn(d.lowerAngle, d.upperAngle) &&
+                   (d.type != JointType::Servo || withinTurn(d.min, d.max)) && nonNegative(d.coneAngle, true) && finite(d.coneAxis) &&
                    length(d.coneAxis) > 1e-9 && nonNegative(d.bounce) && d.bounce <= 1.0;
         }
 
@@ -520,7 +526,7 @@ namespace hf {
             case JointType::AngularSpring:
             case JointType::Servo: {
                 const Vec3 yA = qA * Vec3{0, 1, 0}, zA = qA * Vec3{0, 0, 1}, yB = qB * Vec3{0, 1, 0};
-                return std::atan2(dot(yB, zA), dot(yB, yA));
+                return turnedAs(j.desc, std::atan2(dot(yB, zA), dot(yB, yA)));
             }
             case JointType::Slider:
             case JointType::Piston: return dot(pB - pA, qA * Vec3{1, 0, 0});
@@ -589,5 +595,10 @@ namespace hf {
     }
 
     std::span<const Fault> World::faults() const { return impl_->faults; }
+
+    std::span<const ContactForce> World::contactForces() const {
+        if (!impl_->pushesFresh) impl_->gatherPushes();
+        return impl_->pushes;
+    }
 
 } // namespace hf

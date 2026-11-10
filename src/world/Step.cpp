@@ -176,6 +176,8 @@ namespace hf {
         if (!(dt > 0.0)) return;
         const int n = std::max(1, settings.substeps);
         h = dt / n;
+        stepDt = dt;
+        pushesFresh = false;
         StepProfile profile;
         Laps laps(settings.profile);
 

@@ -24,4 +24,13 @@ namespace hf {
         bool mechanism = false;
     };
 
+    // What a contact pushed with over the last sub-step: the force on b through the point, and the torque on b that
+    // resisted rolling and spin; a takes the opposite of both.
+    struct ContactForce {
+        BodyId a, b;
+        Vec3 point;  // world, as the host handed it
+        Vec3 force;  // N
+        Vec3 torque; // N·m
+    };
+
 } // namespace hf

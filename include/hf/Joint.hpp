@@ -35,10 +35,11 @@ namespace hf {
         // Piston and Servo: how fast the target may move, m/s or rad/s. Motor: the speed a full lever asks for.
         double speed = 1.0;
 
-        double min = -1.0, max = 1.0; // Slider, Piston and Servo: the course, in m or rad
+        double min = -1.0, max = 1.0; // Slider, Piston and Servo: the course, in m or rad; a servo's counts as a window
 
-        // Stops. Hinge, Motor and AngularSpring: the window it turns within, rad from where it was built, inside
-        // -pi..pi. Ball: the cone B's axis swings within, the most it turns off the cone's middle, rad, and that
+        // Stops. Hinge, Motor and AngularSpring: the window it turns within, rad from where it was built: anywhere round
+        // the turn, across the half turn too, and no more than a whole turn wide; its angle is then counted the way round
+        // that falls inside it (jointPosition too). Ball: the cone B's axis swings within, the most it turns off the cone's middle, rad, and that
         // middle, in A's frame: X opens it round the joint's own axis. Infinite: free.
         double lowerAngle = -std::numeric_limits<double>::infinity();
         double upperAngle = std::numeric_limits<double>::infinity();

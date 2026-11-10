@@ -21,6 +21,7 @@ set(HF_TEST_SOURCES
   ArticulationTests.cpp
   BoxLcpTests.cpp
   CenterOfMassTests.cpp
+  ContactForceTests.cpp
   DenseTests.cpp
   DriveTests.cpp
   EditTests.cpp

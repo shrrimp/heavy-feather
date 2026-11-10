@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <numbers>
@@ -125,6 +126,18 @@ namespace hf {
     inline bool positionDrive(JointType t) { return t == JointType::Piston || t == JointType::Servo; }
     // m or rad: within this of its target a position drive only nudges itself back; beyond, it travels at its speed.
     constexpr double kServoDeadband = 1e-3;
+
+    // A turning joint's angle as a window counts it: whichever way round falls inside [lo, hi], or nearest its ends.
+    // A window is at most a whole turn wide, anywhere round it; with an end open, the angle as it is.
+    inline double windowed(double angle, double lo, double hi) {
+        if (!std::isfinite(lo) || !std::isfinite(hi)) return angle;
+        const double mid = 0.5 * (lo + hi);
+        return mid + std::remainder(angle - mid, 2.0 * std::numbers::pi);
+    }
+    // ...and the window that counts it: a servo's course, a hinge's stops.
+    inline double turnedAs(const JointDesc &d, double angle) {
+        return d.type == JointType::Servo ? windowed(angle, d.min, d.max) : windowed(angle, d.lowerAngle, d.upperAngle);
+    }
 
     // What the solver moves: one body, or a weld group moving as one. Group 0 is the static world.
     struct Group {

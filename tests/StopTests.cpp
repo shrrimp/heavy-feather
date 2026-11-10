@@ -277,6 +277,28 @@ TEST_CASE("a window on a loop's cut hinge holds the loop") {
     CHECK_MESSAGE(widest > 0.29, "and the loop falls onto it");
 }
 
+TEST_CASE("a window round the back of the turn lets it through the half turn and holds it at both ends") {
+    // 6 rad wide, from -1 round through the half turn to 5: the gap is the 0.28 rad just short of -1.
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    for (const double spin : {2.0, -2.0}) {
+        World w(settings);
+        const Arm a = armOn(w, JointType::Hinge, -1.0, 5.0);
+        w.setVelocity(a.rod, Vec3{0, spin, 0}, Vec3{0, 0, spin});
+        double lowest = 0.0, highest = 0.0;
+        for (int s = 0; s < 360; ++s) {
+            w.step(kDt);
+            lowest = std::min(lowest, w.jointPosition(a.joint));
+            highest = std::max(highest, w.jointPosition(a.joint));
+        }
+        const double end = spin > 0.0 ? 5.0 : -1.0;
+        CHECK_MESSAGE(std::fabs(w.jointPosition(a.joint) - end) < 0.02, "spun either way, it comes to rest on that end");
+        if (spin > 0.0) CHECK_MESSAGE(highest > kPi + 1.0, "counted past the half turn, not wrapped round to minus");
+        CHECK_MESSAGE(lowest > -1.0 - 0.02, "and never into the gap");
+        CHECK_MESSAGE(highest < 5.0 + 0.02, "from either side");
+    }
+}
+
 TEST_CASE("stops that are not a window or a cone are refused") {
     World w;
     const BodyId rod = rodBetween(w, Vec3{0, 0, 0}, Vec3{2, 0, 0}, 20.0);
@@ -288,6 +310,9 @@ TEST_CASE("stops that are not a window or a cone are refused") {
     j.upperAngle = 0.5;
     CHECK_MESSAGE(!w.addJoint(j).valid(), "a window that isn't a number");
     j.lowerAngle = -0.5;
+    j.upperAngle = 2.0 * kPi;
+    CHECK_MESSAGE(!w.addJoint(j).valid(), "a window more than a whole turn wide");
+    j.upperAngle = 0.5;
     j.type = JointType::Ball;
     j.coneAngle = -0.1;
     CHECK_MESSAGE(!w.addJoint(j).valid(), "a cone narrower than nothing");

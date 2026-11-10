@@ -284,6 +284,9 @@ namespace hf {
         std::vector<int> touched, touchedMachines, freeGroups;
         std::vector<std::uint8_t> machineMark;
         double h = 0.0;
+        double stepDt = 0.0;              // the last step's
+        std::vector<ContactForce> pushes; // contactForces, built when asked once a step
+        bool pushesFresh = false;
 
         std::vector<ContactData> contacts;
         std::vector<ContactPrep> prep;
@@ -446,6 +449,7 @@ namespace hf {
         void rigidPositionsOut();
         void rigidRestitution();
         void endRigidRows(); // the impulses, back into the contacts
+        void gatherPushes();
 
         // Faults.cpp
         template <typename T>

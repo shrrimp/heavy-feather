@@ -66,9 +66,7 @@ namespace hf {
             if (!positionDrive(d.type)) return false;
             const bool held = std::isfinite(d.maxForce) && j.locked;
             const double want = !held ? j.targetEff : j.commanded ? j.holdPos : d.target;
-            const double off = d.type == JointType::Servo ? std::remainder(j.position - want, 2.0 * std::numbers::pi)
-                                                          : j.position - want;
-            return j.lever != 0.0 || j.targetFrom != d.target || std::fabs(off) > kOff;
+            return j.lever != 0.0 || j.targetFrom != d.target || std::fabs(j.position - want) > kOff;
         }
 
         void wakeNext(World::Impl &I, std::uint64_t key) {

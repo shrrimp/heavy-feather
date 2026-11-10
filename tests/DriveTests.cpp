@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 
 #include <doctest/doctest.h>
@@ -105,6 +106,30 @@ TEST_CASE("a servo's lever turns it, and parks it when let go") {
     run(w, 2.0);
     CHECK_MESSAGE(parked < -0.15, "it turned while held");
     CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - parked) < 1e-3, "and stays where it was let go");
+}
+
+TEST_CASE("a servo whose course runs through the half turn goes round the long way, inside it") {
+    WorldSettings settings;
+    settings.gravity = Vec3{};
+    World w(settings);
+    const BodyId arm = rodBetween(w, Vec3{0, 0, 0}, Vec3{2, 0, 0}, 50.0);
+    JointDesc s = jointAt(w, JointType::Servo, BodyId{}, arm, Vec3{0, 0, 0}, kZ);
+    s.maxForce = 5e3;
+    s.speed = 2.0;
+    s.min = -0.5;
+    s.max = 4.5;
+    const JointId servo = w.addJoint(s);
+    w.setTarget(servo, 4.0);
+    double lowest = 0.0;
+    for (int i = 0; i < 240; ++i) {
+        w.step(kDt);
+        lowest = std::min(lowest, w.jointPosition(servo));
+    }
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servo) - 4.0) < 2e-3, "it arrives, past the half turn");
+    CHECK_MESSAGE(lowest > -0.5 - 0.01, "the short way back through the end of its course was never taken");
+    w.setTarget(servo, -0.3);
+    run(w, 4.0);
+    CHECK_MESSAGE(std::fabs(w.jointPosition(servo) + 0.3) < 2e-3, "and comes back the same way");
 }
 
 TEST_CASE("a motor's lever sets its speed") {

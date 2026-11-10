@@ -207,6 +207,10 @@ namespace hf {
         // Refused: a point, depth or normal not finite, a normal far from unit length, a negative friction or lever
         // arm. Restitution is clamped to [0, 1].
         bool addContact(const Contact &contact);
+        // What each contact pushed with over the last step's last sub-step: the step's own, and those the world keeps
+        // between sleepers, still holding them up. Read before the next step's contacts are handed: clearContacts
+        // drops the step's own.
+        std::span<const ContactForce> contactForces() const;
 
         void step(double dt);
 
