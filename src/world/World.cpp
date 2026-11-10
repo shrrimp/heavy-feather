@@ -79,7 +79,8 @@ namespace hf {
         bool usable(const Contact &k) {
             const double n = length(k.normal);
             return finite(k.point) && std::isfinite(k.depth) && n >= 0.5 && n <= 2.0 && nonNegative(k.friction) &&
-                   nonNegative(k.rolling) && nonNegative(k.spinning) && std::isfinite(k.restitution);
+                   nonNegative(k.rolling) && nonNegative(k.spinning) && std::isfinite(k.restitution) &&
+                   nonNegative(k.stiffness) && nonNegative(k.damping) && nonNegative(k.sinkLimit);
         }
 
         bool sameShape(const JointDesc &x, const JointDesc &y) {

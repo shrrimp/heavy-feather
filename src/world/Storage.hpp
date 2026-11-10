@@ -187,6 +187,8 @@ namespace hf {
 
         static SoftParams rigid() { return {}; }
         static SoftParams fromHertz(double hertz, double zeta, double h);
+        // A spring of stiffness k, N/m, on a row of effective inverse mass kn, anchored at no push at all.
+        static SoftParams fromSpring(double k, double zeta, double h, double kn);
     };
 
     // A spring of frequency hertz and damping ratio zeta on a row of effective inverse mass k, as an implicit soft

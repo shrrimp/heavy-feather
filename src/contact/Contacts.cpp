@@ -40,6 +40,15 @@ namespace hf {
         return {omega / a1, a2 * a3, a3};
     }
 
+    SoftParams SoftParams::fromSpring(double k, double zeta, double h, double kn) {
+        // Past the frequency a sub-step can follow, a spring throws what it touches instead of carrying it.
+        const double omega = 2.0 * std::numbers::pi * 0.25 / h;
+        k = std::min(k, omega * omega / kn);
+        const double c = 2.0 * zeta * std::sqrt(k / kn);
+        const double gamma = 1.0 / (h * (c + h * k));
+        return {k / (c + h * k), kn / (kn + gamma), gamma / (kn + gamma)};
+    }
+
     // Once per step: the host's contacts in group frames, their warm start, and the approach speed a bounce
     // reflects, sampled before anything has touched a velocity.
     void World::Impl::beginContacts() {
@@ -339,10 +348,13 @@ namespace hf {
             // A gap is speculative: a rigid row that lets the pair close it within the sub-step and no faster, so a
             // fast body stops on a surface instead of passing through it. One the pair isn't closing fast enough to
             // reach this sub-step, with room to spare, could only solve to zero: the next sub-step looks again.
-            const bool gap = c.depth < 0.0;
+            // A compliant contact's rigid surface is its sink limit, so that is where its gap closes.
+            const double excess = c.depth - sinkReach(c.in);
+            const bool spring = compliant(c.in) && c.depth >= 0.0 && excess <= 0.0;
+            const bool gap = excess < 0.0 && !spring;
             if (gap && c.lnMax <= 0.0) {
                 const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
-                if (-dot(vb - va, c.n) * h * kGapReach < -c.depth) continue;
+                if (-dot(vb - va, c.n) * h * kGapReach < -excess) continue;
             }
 
             ContactPrep p;
@@ -402,9 +414,17 @@ namespace hf {
             apply(*this, p, c, c.ln, c.lt1, c.lt2);
             if (p.turns) applyTurn(*this, p, c.lr1, c.lr2, c.ls);
 
-            // Penetration is recovered in the position pass, where it moves the pose without leaving momentum.
-            p.vtarget = gap ? c.depth / h : 0.0;
-            p.posBias = gap ? 0.0 : std::min(kMaxBias, p.soft.biasRate * std::max(0.0, c.depth - kSlop));
+            // Penetration is recovered in the position pass, where it moves the pose without leaving momentum. A
+            // spring's push is momentum, so it is solved with the velocities and never re-anchored.
+            p.spring = spring;
+            if (spring) {
+                p.soft = SoftParams::fromSpring(c.in.stiffness, c.in.damping, h, p.kn);
+                p.vtarget = p.soft.biasRate * c.depth;
+                p.posBias = 0.0;
+            } else {
+                p.vtarget = gap ? excess / h : 0.0;
+                p.posBias = gap ? 0.0 : std::min(kMaxBias, p.soft.biasRate * std::max(0.0, excess - kSlop));
+            }
             prep.push_back(p);
         }
         flushRuns(*this, false);
@@ -500,9 +520,12 @@ namespace hf {
         void sweepContact(World::Impl &I, ContactPrep &p, bool relax) {
             ContactData &c = I.contacts[std::size_t(p.contact)];
             const RowVelocity v = rowVelocity(I, p, c, false);
-            const double lnn = relax ? std::max(0.0, c.ln + (p.vtarget - v.n) / p.kn)
-                                     : std::max(0.0, c.ln + p.soft.massCoeff * (p.vtarget - v.n) / p.kn -
-                                                         p.soft.impulseCoeff * (c.ln - p.refLn));
+            // Relaxed to no approach, a spring would stop the very sink it carries the load through: it keeps its push.
+            double lnn = c.ln;
+            if (!relax)
+                lnn = std::max(0.0, c.ln + p.soft.massCoeff * (p.vtarget - v.n) / p.kn -
+                                        p.soft.impulseCoeff * (c.ln - p.refLn));
+            else if (!p.spring) lnn = std::max(0.0, c.ln + (p.vtarget - v.n) / p.kn);
             double lt1 = c.lt1, lt2 = c.lt2;
             frictionStep(p, v, c.in.friction * lnn, lt1, lt2);
             const double dn = lnn - c.ln, d1 = lt1 - c.lt1, d2 = lt2 - c.lt2;
@@ -643,8 +666,10 @@ namespace hf {
             const int outer = std::min(kProximalOuter, iterations);
             const int inner = std::max(1, iterations / outer);
             for (int o = 0; o < outer; ++o) {
-                for (int r = part.rowBegin; r < part.rowEnd; ++r)
-                    prep[std::size_t(r)].refLn = contacts[std::size_t(prep[std::size_t(r)].contact)].ln;
+                for (int r = part.rowBegin; r < part.rowEnd; ++r) {
+                    ContactPrep &p = prep[std::size_t(r)];
+                    if (!p.spring) p.refLn = contacts[std::size_t(p.contact)].ln;
+                }
                 for (int k = 0; k < inner; ++k) {
                     for (int s = part.springBegin; s < part.springEnd; ++s)
                         sweepSpring(*this, springs[std::size_t(springOrder[std::size_t(s)])]);
@@ -666,7 +691,7 @@ namespace hf {
         updateTurned();
         for (ContactPrep &p : prep) {
             const ContactData &c = contacts[std::size_t(p.contact)];
-            p.vtarget = std::min(0.0, contactDepth(c)) / h;
+            p.vtarget = std::min(0.0, contactDepth(c) - sinkReach(c.in)) / h;
         }
         for (std::size_t island = 0; island < std::size_t(islands); ++island) {
             // Each pass its own islands; a rigid island's rows are its lean ones.
@@ -733,7 +758,8 @@ namespace hf {
         for (int k = 0; k < kRestitutionIterations; ++k)
             for (ContactPrep &p : prep) {
                 ContactData &c = contacts[std::size_t(p.contact)];
-                if (c.in.restitution <= 0.0 || c.vnImpact > -kRestitutionMinSpeed || c.lnMax <= 0.0) continue;
+                if (c.in.restitution <= 0.0 || compliant(c.in) || c.vnImpact > -kRestitutionMinSpeed || c.lnMax <= 0.0)
+                    continue;
                 const double vn = rowVelocity(*this, p, c, false).n;
                 const double lnn = std::max(0.0, c.ln + (-c.in.restitution * c.vnImpact - vn) / p.kn);
                 const double dn = lnn - c.ln;

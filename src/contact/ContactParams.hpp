@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "hf/Contact.hpp"
 #include "hf/math/Vec3.hpp"
 
 // What a contact is, wherever it's solved: swept beside the machines, or inside one machine's direct solve.
@@ -13,6 +14,9 @@ namespace hf {
     constexpr double kGapReach = 2.0;       // a gap is solved once its approach could close it this many times over
     constexpr double kMaxBias = 3.0;        // m/s: the fastest penetration is pushed out
     constexpr double kRestitutionMinSpeed = 0.5;
+
+    inline bool compliant(const Contact &k) { return k.stiffness > 0.0 && !k.mechanism; }
+    inline double sinkReach(const Contact &k) { return compliant(k) ? k.sinkLimit : 0.0; }
 
     // A stable tangent pair for any unit normal; (n, t1, t2) is right-handed.
     inline void contactBasis(const Vec3 &n, Vec3 &t1, Vec3 &t2) {

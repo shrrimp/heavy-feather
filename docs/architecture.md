@@ -24,7 +24,9 @@ mass of everything attached to it.
   machines they touch. A contact reported before it touches is speculative, so a fast body stops
   on a surface instead of passing through it. A contact the host marks as part of a mechanism, a
   cam on its follower or a gear on its gear, is solved with its machine's joints instead, exactly,
-  its friction bounded by however hard it ends up pushing. Each island is solved on its own
+  its friction bounded by however hard it ends up pushing. A contact given a stiffness is a spring:
+  it pushes in proportion to how deep it sits, damped, and holds rigidly only past its sink limit, so
+  a staircase of voxels can ride on it like a round tyre. Each island is solved on its own
   budget: one holding a machine as hard as a machine needs, one of rigid bodies alone on lean rows
   made once a step, its impacts swept harder than its resting rows.
 - **World**: what the host talks to. It takes bodies, joints and contacts, works out the

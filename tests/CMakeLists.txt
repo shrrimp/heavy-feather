@@ -37,6 +37,7 @@ set(HF_TEST_SOURCES
   RestingTests.cpp
   RopeTests.cpp
   SleepTests.cpp
+  SoftContactTests.cpp
   SpatialTests.cpp
   StopTests.cpp
   StressTests.cpp

@@ -134,6 +134,7 @@ namespace hf {
         double kr1 = 0.0, kr2 = 0.0, ks = 0.0;
         SoftParams soft;
         double vtarget = 0.0, refLn = 0.0, posBias = 0.0, pseudo = 0.0;
+        bool spring = false; // compliant and within its sink: a spring this sub-step
         // Which ends the sweeps write: a moving rigid group. A static, sleeping or machine end is only read, so
         // nothing a row computes ever lands in a group that another island reads.
         bool writeA = false, writeB = false;
@@ -202,6 +203,7 @@ namespace hf {
         double vtarget = 0.0, posBias = 0.0, pseudo = 0.0, massCoeff = 1.0, impulseCoeff = 0.0;
         int turn = -1;           // into rigidTurns, when it resists rolling or spin
         std::uint8_t active = 0; // swept this sub-step: touching, or a gap it can reach
+        std::uint8_t spring = 0; // compliant and within its sink
     };
 
     struct RigidTurn {

@@ -22,6 +22,12 @@ namespace hf {
         // Part of a mechanism's drive path: a cam on its follower, a gear on its gear, a pawl on its ratchet. Solved
         // exactly with the joints of the machine both ends belong to (or one end, the other static); swept otherwise.
         bool mechanism = false;
+        // A compliant contact: a spring of this stiffness, N/m, pushing in proportion to the depth, damped at this
+        // ratio of critical. 0 is rigid. Past sinkLimit, m, it bottoms out and holds rigidly. Its bounce is the
+        // spring's own, so restitution is not read; a mechanism contact is always rigid.
+        double stiffness = 0.0;
+        double damping = 0.0;
+        double sinkLimit = 0.0;
     };
 
     // What a contact pushed with over the last sub-step: the force on b through the point, and the torque on b that

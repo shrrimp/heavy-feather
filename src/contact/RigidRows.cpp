@@ -67,10 +67,11 @@ namespace hf {
         // One pass over a row: soft while solving, the bare non-penetration row when relaxing.
         void sweep(std::vector<SolverBody> &B, std::vector<RigidTurn> &turns, RigidRow &r, bool relax) {
             const Velocity v = velocityOf(B, r, false);
-            const double lnn =
-                relax
-                    ? std::max(0.0, r.ln + (r.vtarget - v.n) / r.kn)
-                    : std::max(0.0, r.ln + r.massCoeff * (r.vtarget - v.n) / r.kn - r.impulseCoeff * (r.ln - r.refLn));
+            // Relaxed to no approach, a spring would stop the very sink it carries the load through: it keeps its push.
+            double lnn = r.ln;
+            if (!relax)
+                lnn = std::max(0.0, r.ln + r.massCoeff * (r.vtarget - v.n) / r.kn - r.impulseCoeff * (r.ln - r.refLn));
+            else if (!r.spring) lnn = std::max(0.0, r.ln + (r.vtarget - v.n) / r.kn);
             double lt1 = r.lt1 + (r.kt1 > 0.0 ? -v.t1 / r.kt1 : 0.0);
             double lt2 = r.lt2 + (r.kt2 > 0.0 ? -v.t2 / r.kt2 : 0.0);
             const double maxT = r.friction * lnn, len = std::sqrt(lt1 * lt1 + lt2 * lt2);
@@ -97,7 +98,7 @@ namespace hf {
             for (int o = 0; o < outer; ++o) {
                 for (int k = 0; k < count; ++k) {
                     RigidRow &r = rows(k);
-                    r.refLn = r.ln;
+                    if (!r.spring) r.refLn = r.ln;
                 }
                 for (int i = 0; i < inner; ++i)
                     for (int k = 0; k < count; ++k) {
@@ -203,19 +204,30 @@ namespace hf {
                 c.depth = contactDepth(c);
                 if (c.impact > 0) --c.impact;
                 // A gap is speculative: the pair may close it within the sub-step and no faster. One it isn't closing
-                // fast enough to reach could only solve to zero: the next sub-step looks again.
-                const bool gap = c.depth < 0.0;
+                // fast enough to reach could only solve to zero: the next sub-step looks again. A compliant contact's
+                // rigid surface is its sink limit.
+                const double excess = c.depth - sinkReach(c.in);
+                const bool spring = compliant(c.in) && c.depth >= 0.0 && excess <= 0.0;
+                const bool gap = excess < 0.0 && !spring;
                 const double approach = -velocityOf(solverBodies, r, false).n;
-                r.active = !(gap && r.lnMax <= 0.0 && approach * h * kGapReach < -c.depth);
+                r.active = !(gap && r.lnMax <= 0.0 && approach * h * kGapReach < -excess);
                 if (!r.active) continue;
                 ++rowsOfKind[0];
                 if (approach > kRestitutionMinSpeed) c.impact = 2;
                 if (c.impact > 0) impactRows.push_back(k);
-                const SoftParams s = gap ? SoftParams::rigid() : soft;
+                SoftParams s = gap ? SoftParams::rigid() : soft;
+                if (spring) s = SoftParams::fromSpring(c.in.stiffness, c.in.damping, h, r.kn);
+                r.spring = spring;
                 r.massCoeff = s.massCoeff;
                 r.impulseCoeff = s.impulseCoeff;
-                r.vtarget = gap ? c.depth / h : 0.0;
-                r.posBias = gap ? 0.0 : std::min(kMaxBias, s.biasRate * std::max(0.0, c.depth - kSlop));
+                if (spring) {
+                    r.refLn = 0.0;
+                    r.vtarget = s.biasRate * c.depth;
+                    r.posBias = 0.0;
+                } else {
+                    r.vtarget = gap ? excess / h : 0.0;
+                    r.posBias = gap ? 0.0 : std::min(kMaxBias, s.biasRate * std::max(0.0, excess - kSlop));
+                }
                 r.pseudo = 0.0;
                 push(solverBodies, r, r.ln * r.n + r.lt1 * r.t1 + r.lt2 * r.t2);
                 if (r.turn >= 0) {
@@ -245,7 +257,9 @@ namespace hf {
         const int begin = rigidStart[i], count = rigidStart[i + 1] - begin;
         for (int k = begin; k < begin + count; ++k) {
             RigidRow &r = rigidRows[std::size_t(k)];
-            if (r.active) r.vtarget = std::min(0.0, contactDepth(contacts[std::size_t(r.contact)])) / h;
+            if (!r.active) continue;
+            const ContactData &c = contacts[std::size_t(r.contact)];
+            r.vtarget = std::min(0.0, contactDepth(c) - sinkReach(c.in)) / h;
         }
         relaxRows(
             *this, [&](int k) -> RigidRow & { return rigidRows[std::size_t(begin + k)]; }, count,
@@ -303,7 +317,8 @@ namespace hf {
         for (int it = 0; it < kRestitutionIterations; ++it)
             for (RigidRow &r : rigidRows) {
                 const ContactData &c = contacts[std::size_t(r.contact)];
-                if (c.in.restitution <= 0.0 || c.vnImpact > -kRestitutionMinSpeed || r.lnMax <= 0.0) continue;
+                if (c.in.restitution <= 0.0 || compliant(c.in) || c.vnImpact > -kRestitutionMinSpeed || r.lnMax <= 0.0)
+                    continue;
                 const double vn = velocityOf(solverBodies, r, false).n;
                 const double lnn = std::max(0.0, r.ln + (-c.in.restitution * c.vnImpact - vn) / r.kn);
                 push(solverBodies, r, (lnn - r.ln) * r.n);
