@@ -67,11 +67,10 @@ namespace hf {
         // One pass over a row: soft while solving, the bare non-penetration row when relaxing.
         void sweep(std::vector<SolverBody> &B, std::vector<RigidTurn> &turns, RigidRow &r, bool relax) {
             const Velocity v = velocityOf(B, r, false);
-            // Relaxed to no approach, a spring would stop the very sink it carries the load through: it keeps its push.
-            double lnn = r.ln;
-            if (!relax)
-                lnn = std::max(0.0, r.ln + r.massCoeff * (r.vtarget - v.n) / r.kn - r.impulseCoeff * (r.ln - r.refLn));
-            else if (!r.spring) lnn = std::max(0.0, r.ln + (r.vtarget - v.n) / r.kn);
+            const double lnn =
+                relax
+                    ? relaxedPush(r.ln, v.n, r.vtarget, r.kn, r.spring)
+                    : std::max(0.0, r.ln + r.massCoeff * (r.vtarget - v.n) / r.kn - r.impulseCoeff * (r.ln - r.refLn));
             double lt1 = r.lt1 + (r.kt1 > 0.0 ? -v.t1 / r.kt1 : 0.0);
             double lt2 = r.lt2 + (r.kt2 > 0.0 ? -v.t2 / r.kt2 : 0.0);
             const double maxT = r.friction * lnn, len = std::sqrt(lt1 * lt1 + lt2 * lt2);
@@ -204,30 +203,21 @@ namespace hf {
                 c.depth = contactDepth(c);
                 if (c.impact > 0) --c.impact;
                 // A gap is speculative: the pair may close it within the sub-step and no faster. One it isn't closing
-                // fast enough to reach could only solve to zero: the next sub-step looks again. A compliant contact's
-                // rigid surface is its sink limit.
-                const double excess = c.depth - sinkReach(c.in);
-                const bool spring = compliant(c.in) && c.depth >= 0.0 && excess <= 0.0;
-                const bool gap = excess < 0.0 && !spring;
+                // fast enough to reach could only solve to zero: the next sub-step looks again.
+                const RowKind kind = rowKind(c.in, c.depth);
                 const double approach = -velocityOf(solverBodies, r, false).n;
-                r.active = !(gap && r.lnMax <= 0.0 && approach * h * kGapReach < -excess);
+                r.active = !(kind.gap && r.lnMax <= 0.0 && approach * h * kGapReach < -kind.excess);
                 if (!r.active) continue;
                 ++rowsOfKind[0];
                 if (approach > kRestitutionMinSpeed) c.impact = 2;
                 if (c.impact > 0) impactRows.push_back(k);
-                SoftParams s = gap ? SoftParams::rigid() : soft;
-                if (spring) s = SoftParams::fromSpring(c.in.stiffness, c.in.damping, h, r.kn);
-                r.spring = spring;
-                r.massCoeff = s.massCoeff;
-                r.impulseCoeff = s.impulseCoeff;
-                if (spring) {
-                    r.refLn = 0.0;
-                    r.vtarget = s.biasRate * c.depth;
-                    r.posBias = 0.0;
-                } else {
-                    r.vtarget = gap ? excess / h : 0.0;
-                    r.posBias = gap ? 0.0 : std::min(kMaxBias, s.biasRate * std::max(0.0, excess - kSlop));
-                }
+                const RowTargets targets = rowTargets(kind, c.in, c.depth, h, r.kn, soft);
+                r.spring = kind.spring;
+                r.massCoeff = targets.soft.massCoeff;
+                r.impulseCoeff = targets.soft.impulseCoeff;
+                r.vtarget = targets.vtarget;
+                r.posBias = targets.posBias;
+                if (kind.spring) r.refLn = 0.0;
                 r.pseudo = 0.0;
                 push(solverBodies, r, r.ln * r.n + r.lt1 * r.t1 + r.lt2 * r.t2);
                 if (r.turn >= 0) {

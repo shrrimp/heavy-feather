@@ -338,6 +338,7 @@ namespace hf {
         responses.clear();
         responseArena.clear();
         for (std::vector<LinkRun> &r : runs) r.assign(machines.size(), LinkRun{});
+        const SoftParams soft = SoftParams::fromHertz(kContactHertz, kContactDamping, h);
         for (std::size_t ci = 0; ci < contacts.size(); ++ci) {
             ContactData &c = contacts[ci];
             // A rigid island's rows are lean ones, made once a step: see RigidRows.cpp.
@@ -348,13 +349,10 @@ namespace hf {
             // A gap is speculative: a rigid row that lets the pair close it within the sub-step and no faster, so a
             // fast body stops on a surface instead of passing through it. One the pair isn't closing fast enough to
             // reach this sub-step, with room to spare, could only solve to zero: the next sub-step looks again.
-            // A compliant contact's rigid surface is its sink limit, so that is where its gap closes.
-            const double excess = c.depth - sinkReach(c.in);
-            const bool spring = compliant(c.in) && c.depth >= 0.0 && excess <= 0.0;
-            const bool gap = excess < 0.0 && !spring;
-            if (gap && c.lnMax <= 0.0) {
+            const RowKind kind = rowKind(c.in, c.depth);
+            if (kind.gap && c.lnMax <= 0.0) {
                 const Vec3 va = a.v + cross(a.w, c.rA), vb = b.v + cross(b.w, c.rB);
-                if (-dot(vb - va, c.n) * h * kGapReach < -excess) continue;
+                if (-dot(vb - va, c.n) * h * kGapReach < -kind.excess) continue;
             }
 
             ContactPrep p;
@@ -406,7 +404,6 @@ namespace hf {
                 p.kr2 = dot(p.t2, p.imAr2 + p.imBr2);
                 p.ks = dot(c.n, p.imAs + p.imBs);
             }
-            p.soft = gap ? SoftParams::rigid() : SoftParams::fromHertz(kContactHertz, kContactDamping, h);
 
             addMachineSides(*this, p, c);
             // Neither end can move along the normal, so the contact can do nothing, and its rows would divide by zero.
@@ -414,17 +411,11 @@ namespace hf {
             apply(*this, p, c, c.ln, c.lt1, c.lt2);
             if (p.turns) applyTurn(*this, p, c.lr1, c.lr2, c.ls);
 
-            // Penetration is recovered in the position pass, where it moves the pose without leaving momentum. A
-            // spring's push is momentum, so it is solved with the velocities and never re-anchored.
-            p.spring = spring;
-            if (spring) {
-                p.soft = SoftParams::fromSpring(c.in.stiffness, c.in.damping, h, p.kn);
-                p.vtarget = p.soft.biasRate * c.depth;
-                p.posBias = 0.0;
-            } else {
-                p.vtarget = gap ? excess / h : 0.0;
-                p.posBias = gap ? 0.0 : std::min(kMaxBias, p.soft.biasRate * std::max(0.0, excess - kSlop));
-            }
+            const RowTargets targets = rowTargets(kind, c.in, c.depth, h, p.kn, soft);
+            p.spring = kind.spring;
+            p.soft = targets.soft;
+            p.vtarget = targets.vtarget;
+            p.posBias = targets.posBias;
             prep.push_back(p);
         }
         flushRuns(*this, false);
@@ -520,12 +511,9 @@ namespace hf {
         void sweepContact(World::Impl &I, ContactPrep &p, bool relax) {
             ContactData &c = I.contacts[std::size_t(p.contact)];
             const RowVelocity v = rowVelocity(I, p, c, false);
-            // Relaxed to no approach, a spring would stop the very sink it carries the load through: it keeps its push.
-            double lnn = c.ln;
-            if (!relax)
-                lnn = std::max(0.0, c.ln + p.soft.massCoeff * (p.vtarget - v.n) / p.kn -
-                                        p.soft.impulseCoeff * (c.ln - p.refLn));
-            else if (!p.spring) lnn = std::max(0.0, c.ln + (p.vtarget - v.n) / p.kn);
+            const double lnn = relax ? relaxedPush(c.ln, v.n, p.vtarget, p.kn, p.spring)
+                                     : std::max(0.0, c.ln + p.soft.massCoeff * (p.vtarget - v.n) / p.kn -
+                                                         p.soft.impulseCoeff * (c.ln - p.refLn));
             double lt1 = c.lt1, lt2 = c.lt2;
             frictionStep(p, v, c.in.friction * lnn, lt1, lt2);
             const double dn = lnn - c.ln, d1 = lt1 - c.lt1, d2 = lt2 - c.lt2;

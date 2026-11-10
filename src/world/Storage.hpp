@@ -179,18 +179,6 @@ namespace hf {
     inline bool moves(const Group &g) { return !g.isStatic && !g.frozen; }
     inline int machineOf(const Group &g) { return g.frozen ? -1 : g.machine; }
 
-    // A row's spring, from a frequency and a damping ratio.
-    struct SoftParams {
-        double biasRate = 0.0;
-        double massCoeff = 1.0;
-        double impulseCoeff = 0.0;
-
-        static SoftParams rigid() { return {}; }
-        static SoftParams fromHertz(double hertz, double zeta, double h);
-        // A spring of stiffness k, N/m, on a row of effective inverse mass kn, anchored at no push at all.
-        static SoftParams fromSpring(double k, double zeta, double h, double kn);
-    };
-
     // A spring of frequency hertz and damping ratio zeta on a row of effective inverse mass k, as an implicit soft
     // row: J v + compliance λ = target, with C the row's position error. At 0 Hz it is a rod: as stiff as a contact.
     inline void springRow(double k, double hertz, double zeta, double C, double h, double &compliance, double &target) {
