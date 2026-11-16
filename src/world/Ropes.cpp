@@ -6,6 +6,7 @@
 
 #include "math/Dense.hpp"
 #include "world/Checks.hpp"
+#include "world/Routes.hpp"
 #include "world/WorldImpl.hpp"
 
 // Ropes: one row each, on the rope's slack, s = L - span >= 0, where L is what is paid out and span its length along
@@ -53,99 +54,6 @@ namespace hf {
 
         double withinSpools(const RopeDesc &d, double length) {
             return spools(d) ? std::clamp(length, d.minLength, d.maxLength) : length;
-        }
-
-        // Where a rope running round a circle of radius r about c, in the plane square to n, touches it: arriving from
-        // a, or leaving toward a. Side +1 goes round anticlockwise about n, -1 clockwise. A point inside the circle
-        // has no tangent: the rim's nearest point stands in.
-        Vec3 tangentPoint(const Vec3 &a, const Vec3 &c, const Vec3 &n, double r, double side, bool arriving) {
-            const Vec3 d = (a - c) - dot(a - c, n) * n;
-            const double D = length(d);
-            if (!(D > r)) return D > 0.0 ? c + (r / D) * d : c;
-            const Vec3 e = d / D, f = cross(n, e);
-            const double cosPhi = r / D, sinPhi = std::sqrt(std::max(0.0, 1.0 - cosPhi * cosPhi));
-            return c + r * (cosPhi * e + (arriving ? side : -side) * sinPhi * f);
-        }
-
-        // How far round from where the rope arrives to where it leaves, the way it goes, in (-π, π].
-        double arcAngle(const Vec3 &in, const Vec3 &out, const Vec3 &c, const Vec3 &n, double side) {
-            const Vec3 a = in - c, b = out - c;
-            return side * std::atan2(dot(n, cross(a, b)), dot(a, b));
-        }
-
-        bool sheave(const RopePoint &p) { return p.radius > 0.0; }
-
-        // The rope through its route, each bend's p and n where its point is: each sheave's tangent points and angle,
-        // which way the span grows as each point moves, and the span. A sheave starts from its last answer, and its
-        // angle stays continuous; one unwound past nothing is off, and the rope runs straight past it. The first time,
-        // a sheave's angle is taken in [-π/2, 3π/2): a half turn round it, as a block's, is a half turn.
-        double laySpan(const std::vector<RopePoint> &route, std::vector<RopeBendState> &bends, bool first) {
-            const int count = int(route.size());
-            for (int k = 0; k < count; ++k) {
-                RopeBendState &b = bends[std::size_t(k)];
-                b.dir = Vec3{};
-                if (!sheave(route[std::size_t(k)])) {
-                    b.in = b.out = b.p;
-                    b.touching = true;
-                } else if (first) {
-                    b.in = b.out = b.p;
-                }
-            }
-            const auto prevOut = [&](int k) {
-                for (int j = k - 1; j >= 0; --j)
-                    if (bends[std::size_t(j)].touching) return bends[std::size_t(j)].out;
-                return bends[std::size_t(k)].p;
-            };
-            const auto nextIn = [&](int k) {
-                for (int j = k + 1; j < count; ++j)
-                    if (bends[std::size_t(j)].touching) return bends[std::size_t(j)].in;
-                return bends[std::size_t(k)].p;
-            };
-            // Neighbouring sheaves depend on each other's tangent points: two passes, each from the last.
-            for (int pass = 0; pass < 2; ++pass)
-                for (int k = 0; k < count; ++k) {
-                    const RopePoint &rp = route[std::size_t(k)];
-                    if (!sheave(rp)) continue;
-                    RopeBendState &b = bends[std::size_t(k)];
-                    const double side = double(rp.side);
-                    // A drum at an end: the rope leaves it, or arrives at it, along one tangent.
-                    if (k == 0 || k == count - 1) {
-                        b.in = b.out = k == 0 ? tangentPoint(nextIn(k), b.p, b.n, rp.radius, side, false)
-                                              : tangentPoint(prevOut(k), b.p, b.n, rp.radius, side, true);
-                        b.touching = true;
-                        continue;
-                    }
-                    const Vec3 in = tangentPoint(prevOut(k), b.p, b.n, rp.radius, side, true);
-                    const Vec3 out = tangentPoint(nextIn(k), b.p, b.n, rp.radius, side, false);
-                    const double raw = arcAngle(in, out, b.p, b.n, side);
-                    double theta = raw;
-                    if (first && pass == 0) theta = raw < -0.5 * kPi ? raw + 2.0 * kPi : raw;
-                    else theta = raw + 2.0 * kPi * std::round((b.theta - raw) / (2.0 * kPi));
-                    b.in = in;
-                    b.out = out;
-                    b.theta = theta;
-                    b.touching = theta > 0.0;
-                }
-
-            double span = 0.0;
-            int prev = 0;
-            Vec3 u{};
-            for (int k = 1; k < count; ++k) {
-                RopeBendState &b = bends[std::size_t(k)];
-                if (!b.touching) continue;
-                const Vec3 seg = b.in - bends[std::size_t(prev)].out;
-                const double len = length(seg);
-                if (len > 1e-12) u = seg / len; // a segment of no length runs on the way the last one did
-                span += len;
-                bends[std::size_t(prev)].dir -= u;
-                b.dir += u;
-                prev = k;
-            }
-            for (int k = 1; k + 1 < count; ++k) {
-                const RopeBendState &b = bends[std::size_t(k)];
-                if (sheave(route[std::size_t(k)]) && b.touching) span += route[std::size_t(k)].radius * b.theta;
-            }
-            return span;
         }
 
         // A sheave left to choose its side goes round the way the route bends there; a drum at an end, anticlockwise.
@@ -316,7 +224,7 @@ namespace hf {
         }
         const bool first = !r.placed;
         if (first) settleSides(r.route, r.bends);
-        r.span = laySpan(r.route, r.bends, first);
+        r.span = laySpan(r.route, r.bends, first, false);
         r.placed = true;
         if (r.slipping) r.length = withinSpools(r.desc, std::max(r.length, r.span));
     }
@@ -337,7 +245,7 @@ namespace hf {
             b.p = c + q * b.local;
             b.n = normalize(q * b.axis);
         }
-        return laySpan(r.route, ropeScratch, false);
+        return laySpan(r.route, ropeScratch, false, false);
     }
 
     // Each sub-step, after the springs: the rows of the ropes no one machine holds, warm from the last sub-step's
@@ -595,7 +503,7 @@ namespace hf {
             bends[k].n = q * p.axis;
         }
         settleSides(points, bends);
-        const double span = laySpan(points, bends, true);
+        const double span = laySpan(points, bends, true, false);
         for (std::size_t k = 0; k < std::min(path.size(), bends.size()); ++k)
             path[k] = {bends[k].in, bends[k].out, bends[k].touching};
         return span;

@@ -24,6 +24,7 @@ set(HF_SOURCES
   world/Machines.cpp
   world/Moves.cpp
   world/Ropes.cpp
+  world/Routes.cpp
   world/Sleep.cpp
   world/Step.cpp
   world/World.cpp)

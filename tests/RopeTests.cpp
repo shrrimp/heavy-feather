@@ -8,6 +8,7 @@
 #include "Builders.hpp"
 #include "hf/World.hpp"
 #include "host/Host.hpp"
+#include "world/Routes.hpp"
 #include "world/TestHooks.hpp"
 #include "world/WorldImpl.hpp"
 
@@ -772,4 +773,24 @@ TEST_CASE("a rope between two links of one machine is held inside it: it keeps a
     CHECK_MESSAGE(w.stats().machines == 1, "one machine");
     CHECK_MESSAGE(pulled > 100.0, "pushed open, the rope takes the push");
     CHECK_MESSAGE(stretch < 1e-4, "and never stretches");
+}
+
+TEST_CASE("a closed route has no ends: round two sheaves it is two straights and a whole turn") {
+    // Two sheaves 2 m apart, radii 0.5 and 0.3, the cord round the outside of both.
+    std::vector<RopePoint> route(2);
+    route[0].radius = 0.5;
+    route[0].side = 1;
+    route[1].radius = 0.3;
+    route[1].side = 1;
+    std::vector<RopeBendState> bends(2);
+    bends[0].p = Vec3{0, 0, 0};
+    bends[1].p = Vec3{2, 0, 0};
+    bends[0].n = bends[1].n = kZ;
+    const double d = 2.0, dr = 0.5 - 0.3;
+    const double straight = std::sqrt(d * d - dr * dr), tilt = std::asin(dr / d);
+    const double expected = 2.0 * straight + 0.5 * (kPi + 2.0 * tilt) + 0.3 * (kPi - 2.0 * tilt);
+    CHECK(std::fabs(laySpan(route, bends, true, true) - expected) < 1e-12);
+    CHECK_MESSAGE((bends[0].touching && bends[1].touching), "both sheaves carry it");
+    // Each sheave's tangent points come from the other's last ones, so a first lay leaves a trace in the angles.
+    CHECK_MESSAGE(std::fabs(bends[0].theta + bends[1].theta - 2.0 * kPi) < 1e-5, "and between them it turns once");
 }
