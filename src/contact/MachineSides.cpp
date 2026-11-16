@@ -109,23 +109,38 @@ namespace hf {
 
         // A belt's end pushes its guide at the axle, so the guide's suspension carries it and its spin doesn't count
         // the belt's speed twice. The carrier takes the push's moment about the axle, and the pull along the belt
-        // turns the belt's link against the carrier.
-        void addGripSides(World::Impl &I, ContactPrep &p, const ContactData &c) {
+        // turns the belt's link against the carrier. Three links of one machine: its rows are written over the
+        // machine's whole velocity once, rather than swept a link at a time.
+        void addGripRows(World::Impl &I, ContactPrep &p, const ContactData &c) {
             const BeltSlot &belt = I.belts[std::size_t(c.grip.belt)];
             const Group &guide = I.groups[std::size_t(p.b)], &carrier = I.groups[std::size_t(I.carrierGroup(belt))];
-            const Articulation &art = I.machines[std::size_t(guide.machine)].m.art;
+            Machine &m = I.machines[std::size_t(guide.machine)].m;
+            const Articulation &art = m.art;
+            const std::size_t n = std::size_t(m.dofs());
             const Vec3 axle = guide.c + c.grip.axle, lever = p.r2 - c.grip.axle;
-            const Vec3 turn = belt.radius * (art.links[std::size_t(belt.link)].R * Vec3{1.0, 0.0, 0.0});
+            const Vec3 axis = art.links[std::size_t(belt.link)].R * Vec3{1.0, 0.0, 0.0};
+            const bool onCarrier = carrier.machine == guide.machine && !carrier.frozen;
             const Vec3 along[3] = {c.n, p.t1, p.t2};
-
-            MachineSide &onGuide = linkSide(I, p, guide.machine, guide.link);
-            for (int x = 0; x < 3; ++x) onGuide.psi[x] = pointForce(axle - art.O, along[x]);
-            MachineSide &onBelt = linkSide(I, p, guide.machine, belt.link);
-            for (int x = 0; x < 3; ++x) onBelt.psi[x] = Force{dot(along[x], c.grip.way) * turn, Vec3{}};
-            if (carrier.machine != guide.machine || carrier.frozen) return;
-            MachineSide &onCarrier = linkSide(I, p, guide.machine, carrier.link);
-            for (int x = 0; x < 3; ++x)
-                onCarrier.psi[x] = Force{cross(lever, along[x]) - dot(along[x], c.grip.way) * turn, Vec3{}};
+            p.denseMachine = guide.machine;
+            p.denseOff = I.responseArena.size();
+            I.responseArena.resize(p.denseOff + 6 * n, 0.0);
+            double *g = I.responseArena.data() + p.denseOff;
+            Mobility k;
+            for (int x = 0; x < 3; ++x) {
+                double *gx = g + std::size_t(x) * n, *wx = g + std::size_t(3 + x) * n;
+                const double pull = dot(along[x], c.grip.way) * belt.radius;
+                art.addPointRow(guide.link, axle, along[x], 1.0, gx);
+                art.addAngularRow(belt.link, axis, pull, gx);
+                if (onCarrier) {
+                    const Vec3 turn = cross(lever, along[x]) - pull * axis;
+                    const double size = length(turn);
+                    if (size > 0.0) art.addAngularRow(carrier.link, turn / size, size, gx);
+                }
+                k.unheld[x] = m.mobility(gx, wx);
+                k.held[x] = dot(gx, wx, n);
+            }
+            k.held12 = dot(g + n, g + 5 * n, n);
+            addMobility(p, k);
         }
 
     } // namespace
@@ -136,8 +151,9 @@ namespace hf {
             MachineSide &s = linkSide(I, p, a.machine, a.link);
             wrenchesAt(p, c, a.c + p.r1 - I.machines[std::size_t(a.machine)].m.art.O, -1.0, s.psi);
         }
-        if (c.grip.belt >= 0) {
-            addGripSides(I, p, c);
+        // A belt touching its own machine has no cross terms with its dense rows: there it is an ordinary contact.
+        if (c.grip.belt >= 0 && machineOf(a) != b.machine) {
+            addGripRows(I, p, c);
         } else if (machineOf(b) >= 0) {
             MachineSide &s = linkSide(I, p, b.machine, b.link);
             wrenchesAt(p, c, b.c + p.r2 - I.machines[std::size_t(b.machine)].m.art.O, 1.0, s.psi);
@@ -195,6 +211,13 @@ namespace hf {
             const Motion &V = runOn(I, s.machine, s.response, pseudo).V;
             for (int r = 0; r < rows; ++r) v[r] += dot(V, s.psi[r]);
         }
+        if (p.denseMachine < 0) return;
+        // A run on the machine has impulses not yet in its velocity: in first, and its twist read again after.
+        flushRun(I, p.denseMachine, pseudo);
+        const Machine &m = I.machines[std::size_t(p.denseMachine)].m;
+        const std::size_t n = std::size_t(m.dofs());
+        const double *x = pseudo ? m.pseudo().data() : m.art.qdot.data();
+        for (int r = 0; r < std::min(rows, 3); ++r) v[r] += dot(I.responseArena.data() + p.denseOff + std::size_t(r) * n, x, n);
     }
 
     void machineImpulse(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, const double *l) {
@@ -206,6 +229,12 @@ namespace hf {
             run.F += f;
             run.V += times(I.responses[std::size_t(s.response)].held, f);
         }
+        if (p.denseMachine < 0) return;
+        flushRun(I, p.denseMachine, pseudo);
+        Machine &m = I.machines[std::size_t(p.denseMachine)].m;
+        const std::size_t n = std::size_t(m.dofs());
+        for (int r = 0; r < std::min(rows, 3); ++r)
+            if (l[r] != 0.0) m.applyContact(I.responseArena.data() + p.denseOff + std::size_t(3 + r) * n, l[r], pseudo);
     }
 
     void flushRuns(World::Impl &I, bool pseudo) {

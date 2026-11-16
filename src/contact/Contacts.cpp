@@ -476,7 +476,7 @@ namespace hf {
         void frictionStep(const ContactPrep &p, const RowVelocity &v, double maxT, double &lt1, double &lt2) {
             // A direction neither end can move along takes no impulse: a hinge's axis on a face square to it.
             double d1 = p.kt1 > 0.0 ? -v.t1 / p.kt1 : 0.0, d2 = p.kt2 > 0.0 ? -v.t2 / p.kt2 : 0.0;
-            if (p.ns > 0) {
+            if (p.ns > 0 || p.denseMachine >= 0) {
                 const double a = p.kt1, b = p.kt12, d = p.kt2;
                 const double det = a * d - b * b;
                 if (det > 1e-12 * a * d) {

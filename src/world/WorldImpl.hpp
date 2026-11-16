@@ -152,7 +152,11 @@ namespace hf {
         // nothing a row computes ever lands in a group that another island reads.
         bool writeA = false, writeB = false;
         int ns = 0;
-        MachineSide sides[4]; // an end each, or a belt's three: its guide, its carrier and its own link
+        MachineSide sides[2];
+        // A belt's end: its rows over its machine's whole velocity, each row's g and then W g, three of each, in
+        // responseArena at off. -1: none.
+        int denseMachine = -1;
+        std::size_t denseOff = 0;
     };
 
     // A machine link's response to unit wrenches this sub-step (Machine::linkResponse), shared by its contacts: Z in
