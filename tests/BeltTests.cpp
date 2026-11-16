@@ -247,3 +247,133 @@ TEST_CASE("a chain on a frame that tumbles keeps its ratio on the frame, and the
                   "on the frame, whatever the frame does");
     CHECK(std::fabs(w.beltSpeed(chain) - small.radius * 4.0) < 1e-6);
 }
+
+namespace {
+
+    // A sprocket on the world, and under it an idler hanging on the belt: on a carriage that slides up and down, the
+    // idler turning on it. The belt holds their weight on two strands.
+    struct Hanging {
+        World w;
+        Guide sprocket;
+        BodyId carriage, idler;
+        JointId turn;
+        BeltId belt;
+        static constexpr double kR = 0.2, kMass = 5.0, kDrop = 1.0;
+
+        Hanging(JointType idlerJoint, double friction, const BeltDesc &d) {
+            sprocket = guideAt(w, JointType::Motor, Vec3{0, 0, 0}, kR);
+            BodyDesc c;
+            c.position = Vec3{0, -kDrop, 0};
+            c.mass = kMass;
+            c.inertia = boxInertia(kMass, Vec3{0.1, 0.1, 0.1});
+            carriage = w.addBody(c);
+            JointDesc slide = jointAt(w, JointType::Slider, BodyId{}, carriage, Vec3{0, -kDrop, 0}, Vec3{0, 1, 0});
+            slide.min = -5.0;
+            slide.max = 5.0;
+            w.addJoint(slide);
+            idler = wheel(w, Vec3{0, -kDrop, 0}, kR, kMass);
+            turn = w.addJoint(jointAt(w, idlerJoint, carriage, idler, Vec3{0, -kDrop, 0}, kZ));
+            BeltGuide free;
+            free.hinge = turn;
+            free.radius = kR;
+            free.friction = friction;
+            const BeltGuide loop[] = {meshing(sprocket), free};
+            belt = w.addBelt(d, loop);
+        }
+
+        double weight() const { return 2.0 * kMass * 9.81; }
+    };
+
+    BeltDesc hangingBelt() {
+        BeltDesc d;
+        d.length = 2.0 * Hanging::kDrop + 2.0 * kPi * Hanging::kR;
+        d.mass = 1.0;
+        return d;
+    }
+
+} // namespace
+
+TEST_CASE("a belt holds what hangs on it, half its weight in each strand") {
+    Hanging k(JointType::Hinge, 0.5, hangingBelt());
+    REQUIRE(k.w.contains(k.belt));
+    run(k.w, 2.0);
+    CHECK(k.w.beltInfo(k.belt).taut);
+    CHECK(std::fabs(k.w.beltTension(k.belt) / (0.5 * k.weight()) - 1.0) < 1e-3);
+    CHECK_MESSAGE(std::fabs(k.w.position(k.carriage).y + Hanging::kDrop) < 1e-4, "where the loop meets its length");
+}
+
+TEST_CASE("a guide that doesn't mesh turns with the belt, and slips once it is held harder than the belt grips") {
+    // The grip: friction 0.5 × tension 49 N round half a turn, 77 N at the rim, 15.4 N·m.
+    Hanging free(JointType::Hinge, 0.5, hangingBelt());
+    drive(free.w, free.sprocket.joint, 2.0, 1000.0);
+    run(free.w, 2.0);
+    CHECK_MESSAGE(std::fabs(free.w.jointVelocity(free.turn) - 2.0) < 1e-4, "free, it turns as the sprocket does");
+    CHECK(free.w.beltInfo(free.belt).slipping == 0);
+
+    Hanging light(JointType::Motor, 0.5, hangingBelt());
+    drive(light.w, light.turn, 0.0, 5.0);
+    drive(light.w, light.sprocket.joint, 2.0, 1000.0);
+    run(light.w, 2.0);
+    CHECK_MESSAGE(std::fabs(light.w.jointVelocity(light.turn) - 2.0) < 1e-4, "a light brake is dragged round");
+    CHECK(std::fabs(std::fabs(light.w.driveForce(light.turn)) - 5.0) < 1e-6);
+
+    Hanging held(JointType::Motor, 0.5, hangingBelt());
+    drive(held.w, held.turn, 0.0, 30.0);
+    drive(held.w, held.sprocket.joint, 2.0, 1000.0);
+    run(held.w, 2.0);
+    CHECK_MESSAGE(std::fabs(held.w.jointVelocity(held.turn)) < 1e-3, "a hard brake holds it: the belt slides over it");
+    CHECK(held.w.beltInfo(held.belt).slipping == 1);
+    CHECK_MESSAGE(std::fabs(held.w.beltSpeed(held.belt) - 2.0 * Hanging::kR) < 1e-4, "while the sprocket runs it on");
+}
+
+TEST_CASE("an elastic belt stretches T L / EA under its load") {
+    Hanging rigid(JointType::Hinge, 0.5, hangingBelt());
+    BeltDesc d = hangingBelt();
+    d.stiffness = 1e4;
+    Hanging stretchy(JointType::Hinge, 0.5, d);
+    run(rigid.w, 3.0);
+    run(stretchy.w, 3.0);
+    const double stretch = 0.5 * rigid.weight() * d.length / d.stiffness;
+    const double drop = rigid.w.position(rigid.carriage).y - stretchy.w.position(stretchy.carriage).y;
+    CHECK_MESSAGE(std::fabs(drop / (0.5 * stretch) - 1.0) < 0.02, "both strands give half of it each");
+}
+
+TEST_CASE("a belt pulled harder than it is strong breaks, lets go, and is mended by setBelt") {
+    BeltDesc d = hangingBelt();
+    d.strength = 30.0;
+    Hanging k(JointType::Hinge, 0.5, d);
+    run(k.w, 0.2);
+    CHECK(k.w.beltInfo(k.belt).broken);
+    CHECK_MESSAGE(k.w.position(k.carriage).y < -Hanging::kDrop - 0.05, "what hung on it falls");
+    d.strength = 1000.0;
+    CHECK(k.w.setBelt(k.belt, d));
+    CHECK(!k.w.beltInfo(k.belt).broken);
+}
+
+TEST_CASE("a chain spinning free on free sprockets keeps its energy") {
+    WorldSettings s;
+    s.gravity = Vec3{};
+    World w(s);
+    const Guide small = guideAt(w, JointType::Hinge, Vec3{0, 0, 0}, pitchRadius(12));
+    const Guide large = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, pitchRadius(30));
+    BeltDesc d;
+    d.length = 3.1;
+    d.mass = 2.0;
+    d.pitch = kPitch;
+    const BeltGuide loop[] = {meshing(small), meshing(large)};
+    const BeltId chain = w.addBelt(d, loop);
+    w.setVelocity(small.body, Vec3{}, Vec3{0, 0, 10});
+    w.step(kDt);
+    const auto energy = [&] {
+        const auto spin = [&](const Guide &g) {
+            const double I = 0.5 * 5.0 * g.radius * g.radius, v = w.jointVelocity(g.joint);
+            return 0.5 * I * v * v;
+        };
+        const double v = w.beltSpeed(chain);
+        return spin(small) + spin(large) + 0.5 * d.mass * v * v;
+    };
+    const double start = energy();
+    REQUIRE(start > 0.0);
+    run(w, 10.0);
+    CHECK(std::fabs(energy() / start - 1.0) < 1e-6);
+}

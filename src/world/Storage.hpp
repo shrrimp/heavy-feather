@@ -145,6 +145,14 @@ namespace hf {
         // the step began.
         int machine = -1, link = -1;
         double angle0 = 0.0;
+
+        // As the last sub-step solved it: tension, the step's peak, rows (-1: none) and each spin row's cap.
+        double force = 0.0, peak = 0.0;
+        int row = -1;
+        std::vector<int> spinRows;
+        std::vector<double> spinCaps;
+        int slipping = 0;
+        bool broken = false;
     };
 
     // How far q turns about the unit axis a, in (-π, π]: its twist, whatever it swings besides.

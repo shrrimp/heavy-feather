@@ -74,18 +74,22 @@ namespace hf {
 
     // A rope's velocity row for slack s, the spools paying out at their rate: a rigid rope lets the slack close within
     // the sub-step and no further, a stretchy one is a spring on its stretch, as stiff as EA over its length.
-    void ropeSlackRow(const RopeSlot &r, double k, double h, double &gamma, double &target) {
-        const double s = r.length - r.span;
-        if (std::isfinite(r.desc.stiffness)) {
-            const double ks = r.desc.stiffness / std::max(r.length, kMinSpringLength);
+    void slackRow(const Slack &s, double k, double h, double &gamma, double &target) {
+        const double slack = s.length - s.span;
+        if (std::isfinite(s.stiffness)) {
+            const double ks = s.stiffness / std::max(s.length, kMinSpringLength);
             const double hertz = k > 0.0 ? std::sqrt(ks * k) / (2.0 * kPi) : 0.0;
             double stretched = 0.0;
-            springRow(k, hertz, r.desc.damping, std::min(s, 0.0), h, gamma, stretched);
-            target = (s < 0.0 ? stretched : -s / h) - r.lengthRate;
+            springRow(k, hertz, s.damping, std::min(slack, 0.0), h, gamma, stretched);
+            target = (slack < 0.0 ? stretched : -slack / h) - s.lengthRate;
             return;
         }
         gamma = kRelEps * k;
-        target = -std::max(s, 0.0) / h - r.lengthRate;
+        target = -std::max(slack, 0.0) / h - s.lengthRate;
+    }
+
+    void ropeSlackRow(const RopeSlot &r, double k, double h, double &gamma, double &target) {
+        slackRow({r.length, r.span, r.desc.stiffness, r.desc.damping, r.lengthRate}, k, h, gamma, target);
     }
 
     // The position pass's target for a rigid rope: a stretch pulled back a share at a time, a slack one free to close.
@@ -234,9 +238,10 @@ namespace hf {
         for (int ri : steppedRopes) layRope(ropes[std::size_t(ri)]);
     }
 
-    // The span of a rope with md's links where the line search tried them: the rest stay where they are.
-    double World::Impl::ropeSpanIn(const RopeSlot &r, const MachineData &md) {
-        ropeScratch = r.bends;
+    // The span of a route with md's links where the line search tried them: the rest stay where they are.
+    double World::Impl::spanIn(const std::vector<RopePoint> &route, const std::vector<RopeBendState> &bends,
+                               bool closed, const MachineData &md) {
+        ropeScratch = bends;
         for (RopeBendState &b : ropeScratch) {
             const Group &g = groups[std::size_t(b.group)];
             const bool link = g.machine >= 0 && &machines[std::size_t(g.machine)] == &md;
@@ -245,7 +250,7 @@ namespace hf {
             b.p = c + q * b.local;
             b.n = normalize(q * b.axis);
         }
-        return laySpan(r.route, ropeScratch, false, false);
+        return laySpan(route, ropeScratch, false, closed);
     }
 
     // Each sub-step, after the springs: the rows of the ropes no one machine holds, warm from the last sub-step's

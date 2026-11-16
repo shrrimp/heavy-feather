@@ -189,6 +189,7 @@ namespace hf {
         void actuatorRows(std::size_t ri);
         void ropeRows();
         void beltRows();
+        void beltLengthRow(BeltSlot &b, std::size_t index);
     };
 
     // A cut joint's equalities.
@@ -416,15 +417,21 @@ namespace hf {
     void RowBuilder::beltRows() {
         const Articulation &art = md.m.art;
         for (const MachineData::BeltLink &bl : md.belts) {
-            const BeltSlot &b = I.belts[std::size_t(bl.belt)];
+            BeltSlot &b = I.belts[std::size_t(bl.belt)];
+            if (mode == Mode::Velocity) b.row = -1;
+            if (b.broken) continue;
+            beltLengthRow(b, std::size_t(bl.belt));
             const int carrierGroup = I.carrierGroup(b), carrier = linkOf(carrierGroup);
             const Link &own = art.links[std::size_t(bl.link)];
             const Vec3 axis = own.R * kX;
             const double run = b.position + b.radius * (art.q[std::size_t(own.coord)] - b.angle0);
             const Quat carrierTurn = turnOf(carrierGroup);
+            if (mode == Mode::Velocity) {
+                b.spinRows.assign(b.guides.size(), -1);
+                b.spinCaps.assign(b.guides.size(), 0.0);
+            }
             for (std::size_t k = 0; k < b.guides.size(); ++k) {
                 const BeltGuide &g = b.guides[k];
-                if (!g.meshes) continue;
                 const int guideGroup = I.body(b.route[k].body)->group, guide = linkOf(guideGroup);
                 const double side = double(g.side);
                 const auto rate = [&](double *J) {
@@ -434,6 +441,18 @@ namespace hf {
                     art.addAngularRow(carrier, axis, b.radius, J);
                 };
                 MachineRow row;
+                if (!g.meshes) {
+                    // It turns with the belt only as far as the belt presses on it: tension round its wrap.
+                    if (mode != Mode::Velocity || !b.bends[k].touching) continue;
+                    const double cap = g.friction * b.force * b.bends[k].theta * I.h;
+                    if (!(cap > 0.0)) continue;
+                    row.lo = -cap;
+                    row.hi = cap;
+                    b.spinRows[k] = md.m.rowCount();
+                    b.spinCaps[k] = cap;
+                    rate(add(row, tagOf(b, std::size_t(bl.belt), k, 0), 0.0));
+                    continue;
+                }
                 if (!position()) {
                     rate(add(row, tagOf(b, std::size_t(bl.belt), k, 0), 0.0));
                     continue;
@@ -445,6 +464,43 @@ namespace hf {
                 rate(add(row, tagOf(b, std::size_t(bl.belt), k, kPosBase), behind));
             }
         }
+    }
+
+    // It pulls the guides' axles, never their spin: that is the meshing and spin rows' to carry, and through both the
+    // drive would be counted twice.
+    void RowBuilder::beltLengthRow(BeltSlot &b, std::size_t index) {
+        constexpr std::uint64_t kLength = 0xff;
+        const bool rigid = !std::isfinite(b.desc.stiffness);
+        if (mode == Mode::Measure) {
+            const double s = b.desc.length - I.spanIn(b.route, b.bends, true, md);
+            if (rigid && s < 0.0) add(MachineRow{}, 0, -s);
+            return;
+        }
+        if (position() && !rigid) return;
+        std::vector<double> &J = md.row;
+        J.assign(std::size_t(md.m.dofs()), 0.0);
+        double read = 0.0; // the slack's rate from what moves on its own
+        for (const RopeBendState &bend : b.bends) {
+            if (!bend.touching || bend.dir == Vec3{}) continue;
+            const Group &g = I.groups[std::size_t(bend.group)];
+            const int link = linkOf(bend.group);
+            if (link >= 0) md.m.art.addPointRow(link, bend.p, bend.dir, -1.0, J.data());
+            else if (!position()) read -= dot(bend.dir, g.v + cross(g.w, bend.p - g.c));
+        }
+        const double slack = b.desc.length - b.span;
+        MachineRow row;
+        row.lo = 0.0;
+        if (position()) {
+            row.target = slack >= 0.0 ? -slack / I.h : std::min(kJointBeta * -slack / I.h, kMaxPosBias);
+            std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, kPosBase + kLength), 0.0));
+            return;
+        }
+        slackRow({b.desc.length, b.span, b.desc.stiffness, b.desc.damping, 0.0}, md.m.inverseMassAlong(J.data()), I.h,
+                 row.compliance, row.target);
+        row.target -= read;
+        if (rigid) row.compliance = 0.0;
+        b.row = md.m.rowCount();
+        std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, kLength), 0.0));
     }
 
     namespace {
@@ -598,6 +654,7 @@ namespace hf {
         m.prepareBounded();
         recordDrives(*this, md);
         recordRopes(md);
+        recordBelts(md);
         writeVelocities(md);
     }
 
@@ -618,6 +675,7 @@ namespace hf {
         recordDrives(*this, md);
         recordStops(*this, md);
         recordRopes(md);
+        recordBelts(md);
         recordContacts(md);
         writeVelocities(md);
     }

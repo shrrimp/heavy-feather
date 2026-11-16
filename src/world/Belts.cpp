@@ -17,6 +17,7 @@ namespace hf {
         constexpr Vec3 kX{1.0, 0.0, 0.0};
         constexpr double kParallel = 0.99984769515639; // cos 1°: guides further apart than this run on no one loop
         constexpr double kArcSamples = 16.0;            // per half turn: the area only sets the link's inertia
+        constexpr double kSlipping = 1.0 - 1e-6;        // a guide's row pulling this much of its cap slips
 
         bool turns(JointType t) {
             return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring ||
@@ -156,7 +157,10 @@ namespace hf {
     }
 
     void World::Impl::beginBelts() {
-        for (BeltSlot &b : belts) b.machine = b.link = -1;
+        for (BeltSlot &b : belts) {
+            b.machine = b.link = -1;
+            b.peak = 0.0;
+        }
         for (std::size_t mi = 0; mi < machines.size(); ++mi) {
             const MachineData &md = machines[mi];
             if (md.frozen) continue;
@@ -208,6 +212,19 @@ namespace hf {
         b.placed = true;
     }
 
+    void World::Impl::recordBelts(MachineData &md) {
+        const std::vector<double> &lambda = md.m.lambda();
+        const auto at = [&](int row) { return row >= 0 && std::size_t(row) < lambda.size() ? lambda[std::size_t(row)] : 0.0; };
+        for (const MachineData::BeltLink &bl : md.belts) {
+            BeltSlot &b = belts[std::size_t(bl.belt)];
+            b.force = at(b.row) / h;
+            b.peak = std::max(b.peak, b.force);
+            b.slipping = 0;
+            for (std::size_t k = 0; k < b.spinRows.size(); ++k)
+                if (b.spinRows[k] >= 0 && std::fabs(at(b.spinRows[k])) >= kSlipping * b.spinCaps[k]) ++b.slipping;
+        }
+    }
+
     void World::Impl::measureBelts() {
         for (BeltSlot &b : belts)
             if (b.alive && b.machine >= 0) layBelt(b);
@@ -218,7 +235,15 @@ namespace hf {
         for (BeltSlot &b : belts) {
             if (!b.alive || b.machine < 0) continue;
             const MachineData &md = machines[std::size_t(b.machine)];
-            if (faulted(groups[std::size_t(md.groupOfLink[0])])) continue;
+            if (faulted(groups[std::size_t(md.groupOfLink[0])])) {
+                b.force = b.peak = 0.0;
+                continue;
+            }
+            if (!b.broken && b.peak > b.desc.strength) {
+                b.broken = true;
+                b.force = 0.0;
+                wakeBelt(b);
+            }
             const Link &L = md.m.art.links[std::size_t(b.link)];
             b.position += b.radius * (md.m.art.q[std::size_t(L.coord)] - b.angle0);
             b.speed = b.radius * md.m.art.qdot[std::size_t(L.dof0)];
@@ -330,6 +355,7 @@ namespace hf {
         if (!usable(desc) || !(desc.carrier == b->desc.carrier)) return I.reject(false);
         if (desc.pitch != b->desc.pitch) b->phase.clear();
         b->desc = desc;
+        b->broken = false;
         I.wakeBelt(*b);
         I.touchBelt(*b);
         return true;
@@ -350,11 +376,19 @@ namespace hf {
         return b ? b->speed : 0.0;
     }
 
-    double World::beltTension(BeltId) const { return 0.0; }
+    double World::beltTension(BeltId id) const {
+        const BeltSlot *b = impl_->belt(id);
+        return b ? b->force : 0.0;
+    }
 
     BeltInfo World::beltInfo(BeltId id) const {
         BeltInfo info;
-        if (const BeltSlot *b = impl_->belt(id)) info.machine = b->machine;
+        if (const BeltSlot *b = impl_->belt(id)) {
+            info.machine = b->machine;
+            info.taut = b->force > 0.0;
+            info.slipping = b->slipping;
+            info.broken = b->broken;
+        }
         return info;
     }
 

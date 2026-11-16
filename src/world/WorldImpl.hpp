@@ -266,6 +266,13 @@ namespace hf {
     // inverse mass k, J v the rate its slack grows by the bodies' motion.
     double positionTarget(const RopeSlot &r, double h);
     void ropeSlackRow(const RopeSlot &r, double k, double h, double &gamma, double &target);
+    // A cord's slack row, a rope's or a belt's: length out, span as it lies, and how fast spools pay it out.
+    struct Slack {
+        double length = 0.0, span = 0.0;
+        double stiffness = 0.0, damping = 0.0;
+        double lengthRate = 0.0;
+    };
+    void slackRow(const Slack &s, double k, double h, double &gamma, double &target);
 
     // MachineSides.cpp: a contact's machine sides. The rows are n, t1, t2 and then the turn rows r1, r2, s; velocities
     // add into v, impulses come in l. pseudo picks the position pass's pseudo-velocity over the velocity. Anything
@@ -449,7 +456,10 @@ namespace hf {
         void afterRopes();                 // each sub-step, its velocities solved: the spools' length
         void endRopes();                   // once the step is done: peaks, breaks
         void wakeRope(const RopeSlot &r);
-        double ropeSpanIn(const RopeSlot &r, const MachineData &md); // with md's links where the line search put them
+        double ropeSpanIn(const RopeSlot &r, const MachineData &md) { return spanIn(r.route, r.bends, false, md); }
+        // A route's span with md's links where the line search put them.
+        double spanIn(const std::vector<RopePoint> &route, const std::vector<RopeBendState> &bends, bool closed,
+                      const MachineData &md);
 
         // Belts.cpp
         void touchBelt(const BeltSlot &b); // the machines it makes, rebuilt before the next step
@@ -461,7 +471,8 @@ namespace hf {
         void layBelt(BeltSlot &b);  // as it lies: its bends, its span
         void placeTeeth(BeltSlot &b);
         void measureBelts();        // each sub-step, before the machines' solves
-        void endBelts();            // once the step is done, faults put back: how far each has run
+        void recordBelts(MachineData &md); // the rows its solve held, read back
+        void endBelts();            // once the step is done, faults put back: how far each has run, what broke
         void removeBeltsOn(JointId hinge);
         void dropBelt(std::uint32_t index);
         // Where its link turns on its carrier's group, as a joint's end; and the link's state in the world, from the
