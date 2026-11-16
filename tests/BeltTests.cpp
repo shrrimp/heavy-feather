@@ -342,8 +342,14 @@ TEST_CASE("a belt pulled harder than it is strong breaks, lets go, and is mended
     BeltDesc d = hangingBelt();
     d.strength = 30.0;
     Hanging k(JointType::Hinge, 0.5, d);
+    int steps = 0;
+    while (!k.w.beltInfo(k.belt).broken && steps++ < 120) k.w.step(kDt);
+    REQUIRE(k.w.beltInfo(k.belt).broken);
+    REQUIRE(k.w.brokenBelts().size() == 1);
+    CHECK(k.w.brokenBelts()[0] == k.belt);
+    k.w.step(kDt);
+    CHECK_MESSAGE(k.w.brokenBelts().empty(), "listed the step it broke");
     run(k.w, 0.2);
-    CHECK(k.w.beltInfo(k.belt).broken);
     CHECK_MESSAGE(k.w.position(k.carriage).y < -Hanging::kDrop - 0.05, "what hung on it falls");
     d.strength = 1000.0;
     CHECK(k.w.setBelt(k.belt, d));
@@ -376,4 +382,62 @@ TEST_CASE("a chain spinning free on free sprockets keeps its energy") {
     REQUIRE(start > 0.0);
     run(w, 10.0);
     CHECK(std::fabs(energy() / start - 1.0) < 1e-6);
+}
+
+TEST_CASE("a frame yawing with a running belt on it is twisted by the belt's turning momentum, m v 2A/L") {
+    WorldSettings s;
+    s.gravity = Vec3{};
+    World w(s);
+    const double guideMass = 0.5, beltMass = 4.0, R = 0.1, d = 0.8, yaw = 2.0, spin = 40.0;
+    const auto box = [&](double mass, const Vec3 &size) {
+        BodyDesc b;
+        b.mass = mass;
+        b.inertia = boxInertia(mass, size);
+        return w.addBody(b);
+    };
+    // A gimbal: yawed at a steady rate, and held level by a motor whose torque is what the test reads.
+    const BodyId yoke = box(5.0, Vec3{0.3, 0.3, 0.3}), frame = box(10.0, Vec3{1.0, 0.3, 0.2});
+    const JointId turn = w.addJoint(jointAt(w, JointType::Motor, BodyId{}, yoke, Vec3{}, Vec3{0, 1, 0}));
+    const JointId level = w.addJoint(jointAt(w, JointType::Motor, yoke, frame, Vec3{}, Vec3{1, 0, 0}));
+    const auto onFrame = [&](JointType type, const Vec3 &at) {
+        Guide g;
+        g.radius = R;
+        g.body = wheel(w, at, R, guideMass);
+        g.joint = w.addJoint(jointAt(w, type, frame, g.body, at, kZ));
+        return g;
+    };
+    const Guide driven = onFrame(JointType::Motor, Vec3{-0.5 * d, 0, 0}), idle = onFrame(JointType::Hinge, Vec3{0.5 * d, 0, 0});
+    BeltDesc b;
+    b.carrier = frame;
+    b.length = 2.0 * d + 2.0 * kPi * R;
+    b.mass = beltMass;
+    const BeltGuide loop[] = {meshing(driven), meshing(idle)};
+    const BeltId belt = w.addBelt(b, loop);
+    REQUIRE(belt.valid());
+    drive(w, driven.joint, spin, 1e4);
+    drive(w, turn, yaw, 1e4);
+    drive(w, level, 0.0, 1e4);
+    run(w, 1.0);
+    REQUIRE(std::fabs(w.beltSpeed(belt) - spin * R) < 1e-6);
+
+    const double reach = 2.0 * (2.0 * d * R + kPi * R * R) / b.length;
+    const double wheels = 2.0 * 0.5 * guideMass * R * R * spin;
+    const double twist = yaw * (beltMass * w.beltSpeed(belt) * reach + wheels);
+    CHECK_MESSAGE(std::fabs(std::fabs(w.driveForce(level)) / twist - 1.0) < 0.01,
+                  "held level against " << twist << " N·m, read " << w.driveForce(level));
+}
+
+TEST_CASE("a belt given another loop runs round its new guides, and lets the old ones go") {
+    ChainDrive c(JointType::Motor, JointType::Hinge);
+    drive(c.w, c.small.joint, 2.0, 1000.0);
+    run(c.w, 0.5);
+    const Guide other = guideAt(c.w, JointType::Hinge, Vec3{0.8, 0, 0}, pitchRadius(24));
+    const BeltGuide loop[] = {meshing(c.small), meshing(other)};
+    const BeltGuide skew[] = {meshing(c.small)};
+    CHECK(!c.w.setBeltLoop(c.chain, skew));
+    REQUIRE(c.w.setBeltLoop(c.chain, loop));
+    run(c.w, 1.0);
+    CHECK(std::fabs(c.w.jointVelocity(other.joint) - 1.0) < 1e-6);
+    CHECK(c.w.jointInfo(c.small.joint).machine == c.w.jointInfo(other.joint).machine);
+    CHECK(c.w.jointInfo(c.small.joint).machine != c.w.jointInfo(c.large.joint).machine);
 }

@@ -211,6 +211,9 @@ namespace hf {
         bool contains(BeltId belt) const;
         // Its length, mass, teeth and stiffness from the next step; a broken belt is mended.
         bool setBelt(BeltId belt, const BeltDesc &desc);
+        // Round other guides, from where it is now; refused as addBelt refuses.
+        bool setBeltLoop(BeltId belt, std::span<const BeltGuide> loop);
+        std::span<const BeltId> brokenBelts() const;                     // the last step's
         BeltDesc beltDesc(BeltId belt) const;
         double beltPosition(BeltId belt) const; // m along the loop since it was added: where its links are now
         double beltSpeed(BeltId belt) const;    // m/s, positive the way its guides are listed

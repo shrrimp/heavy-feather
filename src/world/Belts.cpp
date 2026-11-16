@@ -157,6 +157,7 @@ namespace hf {
     }
 
     void World::Impl::beginBelts() {
+        brokenBelts.clear();
         for (BeltSlot &b : belts) {
             b.machine = b.link = -1;
             b.peak = 0.0;
@@ -242,6 +243,7 @@ namespace hf {
             if (!b.broken && b.peak > b.desc.strength) {
                 b.broken = true;
                 b.force = 0.0;
+                brokenBelts.push_back({std::uint32_t(&b - belts.data()), b.generation});
                 wakeBelt(b);
             }
             const Link &L = md.m.art.links[std::size_t(b.link)];
@@ -250,39 +252,27 @@ namespace hf {
         }
     }
 
-    BeltId World::addBelt(const BeltDesc &desc, std::span<const BeltGuide> loop) {
-        Impl &I = *impl_;
-        if (desc.carrier.valid() && !I.body(desc.carrier)) return {};
+    // The loop as given, laid where its guides are now: false for one no belt can run round.
+    bool World::Impl::loopOf(const BeltDesc &desc, std::span<const BeltGuide> loop, BeltSlot &b) const {
         for (const BeltGuide &g : loop) {
-            const JointSlot *j = I.joint(g.hinge);
-            if (!j || !I.body(j->desc.b)) return {};
+            const JointSlot *j = joint(g.hinge);
+            if (!j || !body(j->desc.b) || !usable(g) || !turns(j->desc.type)) return false;
         }
-        if (loop.size() < 2 || !usable(desc)) return I.reject(BeltId{});
-        for (const BeltGuide &g : loop)
-            if (!usable(g) || !turns(I.joint(g.hinge)->desc.type)) return I.reject(BeltId{});
+        if (loop.size() < 2) return false;
 
-        const auto carrierPose = [&](Vec3 &c, Quat &q) {
-            Vec3 v, w;
-            c = Vec3{};
-            q = Quat{};
-            if (const BodySlot *s = I.body(desc.carrier)) {
-                I.bodyState(*s, c, q, v, w);
-                c = c - q * s->desc.centerOfMass;
-            }
-        };
         std::vector<RopePoint> route;
         std::vector<RopeBendState> bends(loop.size());
         Vec3 axis{};
         for (std::size_t k = 0; k < loop.size(); ++k) {
-            const JointSlot &j = *I.joint(loop[k].hinge);
-            const BodySlot &guide = *I.body(j.desc.b);
+            const JointSlot &j = *joint(loop[k].hinge);
+            const BodySlot &guide = *body(j.desc.b);
             Vec3 c, v, w;
             Quat q;
-            I.bodyState(guide, c, q, v, w);
+            bodyState(guide, c, q, v, w);
             const Vec3 localAxis = normalize(j.desc.frameB.rotation * kX);
             const Vec3 worldAxis = q * localAxis;
             if (k == 0) axis = worldAxis;
-            if (std::fabs(dot(axis, worldAxis)) < kParallel) return I.reject(BeltId{});
+            if (std::fabs(dot(axis, worldAxis)) < kParallel) return false;
             RopePoint p;
             p.body = j.desc.b;
             p.position = j.desc.frameB.position;
@@ -302,10 +292,42 @@ namespace hf {
             axis = -1.0 * axis;
             for (RopePoint &p : route) p.axis = -1.0 * p.axis;
         }
-        for (RopeBendState &b : bends) b.n = axis;
+        for (RopeBendState &bend : bends) bend.n = axis;
         const double span = laySpan(route, bends, true, true);
         const double area = enclosedArea(bends, route, axis);
-        if (!positive(span) || !positive(area)) return I.reject(BeltId{});
+        if (!positive(span) || !positive(area)) return false;
+
+        Vec3 middle{};
+        for (const RopeBendState &bend : bends) middle += bend.p;
+        middle = middle / double(bends.size());
+        Vec3 c{}, v, w;
+        Quat q{};
+        if (const BodySlot *s = body(desc.carrier)) {
+            bodyState(*s, c, q, v, w);
+            c = c - q * s->desc.centerOfMass;
+        }
+        b.guides.assign(loop.begin(), loop.end());
+        b.route = std::move(route);
+        b.bends = std::move(bends);
+        b.phase.clear();
+        b.placed = true;
+        b.span = span;
+        b.radius = 2.0 * area / span;
+        b.middle = conjugate(q) * (middle - c);
+        b.axis = conjugate(q) * axis;
+        return true;
+    }
+
+    BeltId World::addBelt(const BeltDesc &desc, std::span<const BeltGuide> loop) {
+        Impl &I = *impl_;
+        if (desc.carrier.valid() && !I.body(desc.carrier)) return {};
+        for (const BeltGuide &g : loop) {
+            const JointSlot *j = I.joint(g.hinge);
+            if (!j || !I.body(j->desc.b)) return {};
+        }
+        BeltSlot fresh;
+        fresh.desc = desc;
+        if (!usable(desc) || !I.loopOf(desc, loop, fresh)) return I.reject(BeltId{});
 
         std::uint32_t index;
         if (!I.freeBelts.empty()) {
@@ -316,30 +338,36 @@ namespace hf {
             I.belts.emplace_back();
         }
         BeltSlot &b = I.belts[index];
-        BeltSlot fresh;
         fresh.generation = b.generation;
+        fresh.alive = true;
         b = std::move(fresh);
-        b.alive = true;
-        b.desc = desc;
-        b.guides.assign(loop.begin(), loop.end());
-        b.route = std::move(route);
-        b.bends = std::move(bends);
-        b.placed = true;
-        b.span = span;
-        b.radius = 2.0 * area / span;
-
-        Vec3 middle{};
-        for (const RopeBendState &bend : b.bends) middle += bend.p;
-        middle = middle / double(b.bends.size());
-        Vec3 c;
-        Quat q;
-        carrierPose(c, q);
-        b.middle = conjugate(q) * (middle - c);
-        b.axis = conjugate(q) * axis;
-
         I.touchBelt(b);
         I.wakeBelt(b);
         return {index, b.generation};
+    }
+
+    // The belt keeps its place and speed: only the guides it runs round change.
+    bool World::setBeltLoop(BeltId id, std::span<const BeltGuide> loop) {
+        Impl &I = *impl_;
+        BeltSlot *b = I.belt(id);
+        if (!b) return false;
+        BeltSlot laid;
+        if (!I.loopOf(b->desc, loop, laid)) return I.reject(false);
+        // The machines of the guides it leaves are rebuilt as well as those it joins.
+        I.wakeBelt(*b);
+        I.touchBelt(*b);
+        b->guides = std::move(laid.guides);
+        b->route = std::move(laid.route);
+        b->bends = std::move(laid.bends);
+        b->phase.clear();
+        b->placed = true;
+        b->span = laid.span;
+        b->radius = laid.radius;
+        b->middle = laid.middle;
+        b->axis = laid.axis;
+        I.wakeBelt(*b);
+        I.touchBelt(*b);
+        return true;
     }
 
     void World::removeBelt(BeltId id) {
@@ -391,6 +419,8 @@ namespace hf {
         }
         return info;
     }
+
+    std::span<const BeltId> World::brokenBelts() const { return impl_->brokenBelts; }
 
     int World::beltPath(BeltId id, std::span<RopeBend> out) const {
         const BeltSlot *b = impl_->belt(id);

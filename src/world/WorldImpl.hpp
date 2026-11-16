@@ -322,6 +322,7 @@ namespace hf {
         std::vector<RowState> ropeState;
         BoxLcpScratch ropeLcp;
         std::vector<RopeId> brokenRopes; // the last step's
+        std::vector<BeltId> brokenBelts;
         std::vector<double> arena;
         std::vector<LinkResponse> responses;
         std::vector<double> responseArena;
@@ -471,6 +472,7 @@ namespace hf {
         void layBelt(BeltSlot &b);  // as it lies: its bends, its span
         void placeTeeth(BeltSlot &b);
         void measureBelts();        // each sub-step, before the machines' solves
+        bool loopOf(const BeltDesc &desc, std::span<const BeltGuide> loop, BeltSlot &b) const;
         void recordBelts(MachineData &md); // the rows its solve held, read back
         void endBelts();            // once the step is done, faults put back: how far each has run, what broke
         void removeBeltsOn(JointId hinge);
