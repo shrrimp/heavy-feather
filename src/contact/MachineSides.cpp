@@ -59,15 +59,17 @@ namespace hf {
             double held[6] = {}, unheld[6] = {}, held12 = 0.0;
         };
 
-        // One end on a machine link: no solve of its own, the link's response carries it.
-        void addLinkSide(World::Impl &I, ContactPrep &p, const ContactData &c, const Group &g, const Vec3 &r,
-                         double sign, Mobility &k) {
-            const Machine &m = I.machines[std::size_t(g.machine)].m;
+        // An end on a machine link: no solve of its own, the link's response carries it. Its wrenches are the
+        // caller's to write.
+        MachineSide &linkSide(World::Impl &I, ContactPrep &p, int machine, int link) {
             MachineSide &s = p.sides[p.ns++];
-            s.machine = g.machine;
-            s.response = responseFor(I, g.machine, g.link);
-            s.n = m.dofs();
-            wrenchesAt(p, c, g.c + r - m.art.O, sign, s.psi);
+            s.machine = machine;
+            s.response = responseFor(I, machine, link);
+            s.n = I.machines[std::size_t(machine)].m.dofs();
+            return s;
+        }
+
+        void addOwn(World::Impl &I, const ContactPrep &p, const MachineSide &s, Mobility &k) {
             const LinkResponse &R = I.responses[std::size_t(s.response)];
             for (int x = 0; x < rowsOf(p); ++x) {
                 k.held[x] += quadratic(R.held, s.psi[x], s.psi[x]);
@@ -76,10 +78,9 @@ namespace hf {
             k.held12 += quadratic(R.held, s.psi[1], s.psi[2]);
         }
 
-        // Both ends on one machine: a push on either link moves the other, so the pair's mobility has a cross term.
+        // Two ends on one machine: a push on either link moves the other, so the pair's mobility has a cross term.
         // Without it, two links a loop locks together would look free to each other.
-        void addCross(World::Impl &I, const ContactPrep &p, Mobility &k) {
-            const MachineSide &sa = p.sides[0], &sb = p.sides[1];
+        void addCross(World::Impl &I, const ContactPrep &p, const MachineSide &sa, const MachineSide &sb, Mobility &k) {
             const LinkResponse &Ra = I.responses[std::size_t(sa.response)];
             const LinkResponse &Rb = I.responses[std::size_t(sb.response)];
             const Articulation &art = I.machines[std::size_t(sa.machine)].m.art;
@@ -106,26 +107,54 @@ namespace hf {
             }
         }
 
+        // A belt's end pushes its guide at the axle, so the guide's suspension carries it and its spin doesn't count
+        // the belt's speed twice. The carrier takes the push's moment about the axle, and the pull along the belt
+        // turns the belt's link against the carrier.
+        void addGripSides(World::Impl &I, ContactPrep &p, const ContactData &c) {
+            const BeltSlot &belt = I.belts[std::size_t(c.grip.belt)];
+            const Group &guide = I.groups[std::size_t(p.b)], &carrier = I.groups[std::size_t(I.carrierGroup(belt))];
+            const Articulation &art = I.machines[std::size_t(guide.machine)].m.art;
+            const Vec3 axle = guide.c + c.grip.axle, lever = p.r2 - c.grip.axle;
+            const Vec3 turn = belt.radius * (art.links[std::size_t(belt.link)].R * Vec3{1.0, 0.0, 0.0});
+            const Vec3 along[3] = {c.n, p.t1, p.t2};
+
+            MachineSide &onGuide = linkSide(I, p, guide.machine, guide.link);
+            for (int x = 0; x < 3; ++x) onGuide.psi[x] = pointForce(axle - art.O, along[x]);
+            MachineSide &onBelt = linkSide(I, p, guide.machine, belt.link);
+            for (int x = 0; x < 3; ++x) onBelt.psi[x] = Force{dot(along[x], c.grip.way) * turn, Vec3{}};
+            if (carrier.machine != guide.machine || carrier.frozen) return;
+            MachineSide &onCarrier = linkSide(I, p, guide.machine, carrier.link);
+            for (int x = 0; x < 3; ++x)
+                onCarrier.psi[x] = Force{cross(lever, along[x]) - dot(along[x], c.grip.way) * turn, Vec3{}};
+        }
+
     } // namespace
 
     void addMachineSides(World::Impl &I, ContactPrep &p, const ContactData &c) {
         const Group &a = I.groups[std::size_t(p.a)], &b = I.groups[std::size_t(p.b)];
-        if (machineOf(a) >= 0 && machineOf(a) == machineOf(b)) {
-            Mobility k;
-            addLinkSide(I, p, c, a, p.r1, -1.0, k);
-            addLinkSide(I, p, c, b, p.r2, 1.0, k);
-            addCross(I, p, k);
-            addMobility(p, k);
-            return;
-        }
         if (machineOf(a) >= 0) {
-            Mobility k;
-            addLinkSide(I, p, c, a, p.r1, -1.0, k);
-            addMobility(p, k);
+            MachineSide &s = linkSide(I, p, a.machine, a.link);
+            wrenchesAt(p, c, a.c + p.r1 - I.machines[std::size_t(a.machine)].m.art.O, -1.0, s.psi);
         }
-        if (machineOf(b) >= 0) {
+        if (c.grip.belt >= 0) {
+            addGripSides(I, p, c);
+        } else if (machineOf(b) >= 0) {
+            MachineSide &s = linkSide(I, p, b.machine, b.link);
+            wrenchesAt(p, c, b.c + p.r2 - I.machines[std::size_t(b.machine)].m.art.O, 1.0, s.psi);
+        }
+        // Each machine's mobility is floored as one, its ends' cross terms in it.
+        for (int i = 0; i < p.ns; ++i) {
+            const int mi = p.sides[i].machine;
+            bool seen = false;
+            for (int j = 0; j < i; ++j) seen = seen || p.sides[j].machine == mi;
+            if (seen) continue;
             Mobility k;
-            addLinkSide(I, p, c, b, p.r2, 1.0, k);
+            for (int j = i; j < p.ns; ++j) {
+                if (p.sides[j].machine != mi) continue;
+                addOwn(I, p, p.sides[j], k);
+                for (int l = i; l < j; ++l)
+                    if (p.sides[l].machine == mi) addCross(I, p, p.sides[l], p.sides[j], k);
+            }
             addMobility(p, k);
         }
     }

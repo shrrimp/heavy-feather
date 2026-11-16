@@ -136,6 +136,7 @@ namespace hf {
         solveContacts();
         afterPhase(FaultPhase::Contacts, i);
         if (machinesPass) {
+            recordGrips();
             for (int mi : steppedMachines) afterContacts(machines[std::size_t(mi)]);
             afterRopes();
         }

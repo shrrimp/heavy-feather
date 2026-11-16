@@ -95,6 +95,12 @@ namespace hf {
         int impact = 0;
         bool fromKept = false; // the world kept it between sleepers: its impulses are its own warm start
         bool absorbed = false; // handed again for a contact the world keeps, which took its fresh look at it
+        // On a running belt: its index, the guide carrying it, the guide's axle from its group's centre and the
+        // belt's way there (world), as the step began. belt < 0: an ordinary contact.
+        struct Grip {
+            int belt = -1, guide = -1;
+            Vec3 axle{}, way{};
+        } grip;
     };
 
     // A contact end on a machine: its rows through the machine's mobility, n doubles each, in the arena as
@@ -146,7 +152,7 @@ namespace hf {
         // nothing a row computes ever lands in a group that another island reads.
         bool writeA = false, writeB = false;
         int ns = 0;
-        MachineSide sides[2];
+        MachineSide sides[4]; // an end each, or a belt's three: its guide, its carrier and its own link
     };
 
     // A machine link's response to unit wrenches this sub-step (Machine::linkResponse), shared by its contacts: Z in
@@ -473,6 +479,9 @@ namespace hf {
         void placeTeeth(BeltSlot &b);
         void measureBelts();        // each sub-step, before the machines' solves
         bool loopOf(const BeltDesc &desc, std::span<const BeltGuide> loop, BeltSlot &b) const;
+        ContactData::Grip gripOf(const Contact &k, const Group &guide) const;
+        Vec3 gripVelocity(const ContactData &c) const; // the belt's at the point, on b's end
+        void recordGrips();                            // each guide's push from its belt's contacts
         void recordBelts(MachineData &md); // the rows its solve held, read back
         void endBelts();            // once the step is done, faults put back: how far each has run, what broke
         void removeBeltsOn(JointId hinge);

@@ -151,6 +151,7 @@ namespace hf {
         int row = -1;
         std::vector<int> spinRows;
         std::vector<double> spinCaps;
+        std::vector<double> grip; // N, each guide's push from the contacts it carries
         int slipping = 0;
         bool broken = false;
     };

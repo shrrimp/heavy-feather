@@ -125,9 +125,11 @@ namespace hf {
             c.depth = c.in.depth;
             warmStart(c, *a, *b);
             c.lnMax = 0.0;
-            const Vec3 va = ga.v + cross(ga.w, c.rA), vb = gb.v + cross(gb.w, c.rB);
+            c.grip = gripOf(c.in, gb);
+            const Vec3 va = ga.v + cross(ga.w, c.rA);
+            const Vec3 vb = c.grip.belt >= 0 ? gripVelocity(c) : gb.v + cross(gb.w, c.rB);
             c.vnImpact = dot(vb - va, c.n);
-            c.machine = directMachine(c.in, ga, gb);
+            c.machine = c.grip.belt >= 0 ? -1 : directMachine(c.in, ga, gb);
             c.row = -1;
             c.impact = 0;
             contacts[active++] = c;
@@ -321,7 +323,11 @@ namespace hf {
         const auto shift = [](const Group &g, const Vec3 &r) {
             return moves(g) || g.kinematic ? g.c - g.c0 + cross(g.turned, r) : Vec3{};
         };
-        return c.depth0 - dot(shift(b, c.rB) - shift(a, c.rA), c.n);
+        if (c.grip.belt < 0) return c.depth0 - dot(shift(b, c.rB) - shift(a, c.rA), c.n);
+        // A guide spinning under its belt doesn't carry the belt round with it.
+        const Group &carrier = groups[std::size_t(carrierGroup(belts[std::size_t(c.grip.belt)]))];
+        const Vec3 turned = moves(carrier) || carrier.kinematic ? cross(carrier.turned, c.rB - c.grip.axle) : Vec3{};
+        return c.depth0 - dot(shift(b, c.grip.axle) + turned - shift(a, c.rA), c.n);
     }
 
     void World::Impl::updateTurned() {
@@ -392,7 +398,7 @@ namespace hf {
             p.kt1 = p.imA + p.imB + dot(p.r1ct1, p.imR1ct1) + dot(p.r2ct1, p.imR2ct1);
             p.kt2 = p.imA + p.imB + dot(p.r1ct2, p.imR1ct2) + dot(p.r2ct2, p.imR2ct2);
             p.kt12 = dot(p.r1ct1, p.imR1ct2) + dot(p.r2ct1, p.imR2ct2);
-            p.turns = c.in.rolling > 0.0 || c.in.spinning > 0.0;
+            p.turns = c.grip.belt < 0 && (c.in.rolling > 0.0 || c.in.spinning > 0.0);
             if (p.turns) {
                 p.imAr1 = p.invIwA * p.t1;
                 p.imAr2 = p.invIwA * p.t2;

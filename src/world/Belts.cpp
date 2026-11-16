@@ -226,6 +226,37 @@ namespace hf {
         }
     }
 
+    ContactData::Grip World::Impl::gripOf(const Contact &k, const Group &guide) const {
+        ContactData::Grip g;
+        const BeltSlot *b = belt(k.belt);
+        if (!b || b->broken || b->machine < 0 || guide.machine != b->machine) return g;
+        for (std::size_t i = 0; i < b->route.size(); ++i)
+            if (b->route[i].body == k.b) {
+                g.belt = int(k.belt.index);
+                g.guide = int(i);
+                g.axle = guide.q * b->bends[i].local;
+                const double way = length(k.beltDirection);
+                g.way = way > 0.0 ? k.beltDirection / way : Vec3{};
+                return g;
+            }
+        return g;
+    }
+
+    Vec3 World::Impl::gripVelocity(const ContactData &c) const {
+        const BeltSlot &b = belts[std::size_t(c.grip.belt)];
+        const Group &guide = groups[std::size_t(c.gb)], &carrier = groups[std::size_t(carrierGroup(b))];
+        return guide.v + cross(guide.w, c.grip.axle) + cross(carrier.w, c.rB - c.grip.axle) + b.speed * c.grip.way;
+    }
+
+    void World::Impl::recordGrips() {
+        for (BeltSlot &b : belts)
+            if (b.alive) b.grip.assign(b.guides.size(), 0.0);
+        for (const ContactPrep &p : prep) {
+            const ContactData &c = contacts[std::size_t(p.contact)];
+            if (c.grip.belt >= 0) belts[std::size_t(c.grip.belt)].grip[std::size_t(c.grip.guide)] += c.ln / h;
+        }
+    }
+
     void World::Impl::measureBelts() {
         for (BeltSlot &b : belts)
             if (b.alive && b.machine >= 0) layBelt(b);

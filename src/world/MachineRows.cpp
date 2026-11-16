@@ -442,9 +442,12 @@ namespace hf {
                 };
                 MachineRow row;
                 if (!g.meshes) {
-                    // It turns with the belt only as far as the belt presses on it: tension round its wrap.
-                    if (mode != Mode::Velocity || !b.bends[k].touching) continue;
-                    const double cap = g.friction * b.force * b.bends[k].theta * I.h;
+                    // It turns with the belt only as far as the belt presses on it: tension round its wrap, and what
+                    // its contacts push it into the belt with.
+                    if (mode != Mode::Velocity) continue;
+                    const double wrap = b.bends[k].touching ? b.force * b.bends[k].theta : 0.0;
+                    const double grip = k < b.grip.size() ? b.grip[k] : 0.0;
+                    const double cap = g.friction * (wrap + grip) * I.h;
                     if (!(cap > 0.0)) continue;
                     row.lo = -cap;
                     row.hi = cap;

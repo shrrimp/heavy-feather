@@ -441,3 +441,159 @@ TEST_CASE("a belt given another loop runs round its new guides, and lets the old
     CHECK(c.w.jointInfo(c.small.joint).machine == c.w.jointInfo(other.joint).machine);
     CHECK(c.w.jointInfo(c.small.joint).machine != c.w.jointInfo(c.large.joint).machine);
 }
+
+namespace {
+
+    BodyId slab(World &w, const Vec3 &at, const Vec3 &half, double mass, bool fixed = false) {
+        BodyDesc b;
+        b.position = at;
+        b.mass = mass;
+        b.inertia = boxInertia(mass, half);
+        b.isStatic = fixed;
+        return w.addBody(b);
+    }
+
+    // The straight from one guide to the next, the way the belt runs along it.
+    Vec3 straight(const World &w, BeltId belt, int from) {
+        RopeBend path[2];
+        w.beltPath(belt, path);
+        return normalize(path[(from + 1) % 2].in - path[from].out);
+    }
+
+    // A block on a track round a driven sprocket and an idler that doesn't mesh, on the ground: the host's contacts
+    // under each guide, two across the track.
+    struct Tracked {
+        static constexpr double kR = 0.15, kFriction = 0.8;
+        World w;
+        BodyId ground, block;
+        Guide sprocket, idler;
+        BeltId track;
+
+        Tracked() {
+            ground = slab(w, Vec3{0, -0.5, 0}, Vec3{50, 0.5, 50}, 1.0, true);
+            block = slab(w, Vec3{0, kR, 0}, Vec3{0.6, 0.1, 0.3}, 40.0);
+            const auto onBlock = [&](JointType type, double x) {
+                Guide g;
+                g.radius = kR;
+                g.body = wheel(w, Vec3{x, kR, 0}, kR, 2.0);
+                g.joint = w.addJoint(jointAt(w, type, block, g.body, Vec3{x, kR, 0}, kZ));
+                return g;
+            };
+            sprocket = onBlock(JointType::Motor, -0.5);
+            idler = onBlock(JointType::Hinge, 0.5);
+            BeltDesc d;
+            d.carrier = block;
+            d.length = 2.0 + 2.0 * kPi * kR;
+            d.mass = 4.0;
+            BeltGuide free;
+            free.hinge = idler.joint;
+            free.radius = kR;
+            free.friction = kFriction;
+            const BeltGuide loop[] = {meshing(sprocket), free};
+            track = w.addBelt(d, loop);
+        }
+
+        double weight() const { return (40.0 + 2.0 * 2.0 + 4.0) * 9.81; }
+        double mass() const { return 40.0 + 2.0 * 2.0 + 4.0; }
+
+        void touch() {
+            w.clearContacts();
+            const Vec3 bottom = straight(w, track, 0);
+            std::uint64_t feature = 0;
+            for (const Guide &g : {sprocket, idler})
+                for (double z : {-0.2, 0.2}) {
+                    Contact k;
+                    k.a = ground;
+                    k.b = g.body;
+                    k.point = w.position(g.body) + Vec3{0, -kR, z};
+                    k.normal = Vec3{0, 1, 0};
+                    k.depth = -k.point.y;
+                    k.feature = feature++;
+                    k.friction = kFriction;
+                    k.belt = track;
+                    k.beltDirection = bottom;
+                    w.addContact(k);
+                }
+        }
+
+        void drive(double seconds, double resist = 0.0) {
+            for (int s = 0; s < int(std::lround(seconds / kDt)); ++s) {
+                touch();
+                if (resist != 0.0) w.applyForce(block, Vec3{resist, 0, 0}, w.position(block) + Vec3{0, -kR, 0});
+                w.step(kDt);
+            }
+        }
+    };
+
+} // namespace
+
+TEST_CASE("a track on the ground carries its block at the track's speed, and turns the idler under it") {
+    Tracked t;
+    REQUIRE(t.w.contains(t.track));
+    REQUIRE(straight(t.w, t.track, 0).x > 0.99);
+    t.drive(0.5);
+    ::drive(t.w, t.sprocket.joint, 4.0, 1e4);
+    t.drive(2.0);
+    const double speed = t.w.beltSpeed(t.track);
+    CHECK(std::fabs(speed - 4.0 * Tracked::kR) < 1e-6);
+    CHECK_MESSAGE(std::fabs(t.w.velocity(t.block).x + speed) < 1e-3, "the bottom stands on the ground while the block goes");
+    CHECK_MESSAGE(std::fabs(t.w.jointVelocity(t.idler.joint) - 4.0) < 1e-3, "the ground's push presses the idler on the belt");
+    CHECK(std::fabs(t.w.position(t.block).y - Tracked::kR) < 0.01);
+}
+
+TEST_CASE("a track pulls with at most its friction times its weight, and spins past it") {
+    Tracked held;
+    held.drive(0.5);
+    ::drive(held.w, held.sprocket.joint, 4.0, 1e4);
+    held.drive(2.0, 0.5 * Tracked::kFriction * held.weight());
+    // The sweep's crawl under load: driven wheels in this place creep 8 mm/s, the track 2.5.
+    CHECK_MESSAGE(std::fabs(held.w.velocity(held.block).x + held.w.beltSpeed(held.track)) < 0.01 * 4.0 * Tracked::kR,
+                  "half its grip: it holds");
+
+    Tracked spun;
+    spun.drive(0.5);
+    ::drive(spun.w, spun.sprocket.joint, 4.0, 1e4);
+    const double push = 1.5 * Tracked::kFriction * spun.weight();
+    spun.drive(0.5, push);
+    const double v0 = spun.w.velocity(spun.block).x;
+    spun.drive(1.0, push);
+    const double pulled = push - spun.mass() * (spun.w.velocity(spun.block).x - v0);
+    CHECK_MESSAGE(std::fabs(pulled / (Tracked::kFriction * spun.weight()) - 1.0) < 0.02, "pulled with " << pulled);
+    CHECK_MESSAGE(spun.w.velocity(spun.block).x > 0.0, "pushed back while its track spins forward");
+    CHECK(std::fabs(spun.w.beltSpeed(spun.track) - 4.0 * Tracked::kR) < 1e-5);
+}
+
+TEST_CASE("a conveyor carries a box along its top at its speed") {
+    World w;
+    const double R = 0.1;
+    const Guide head = guideAt(w, JointType::Motor, Vec3{0, 0, 0}, R), tail = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, R);
+    BeltDesc d;
+    d.length = 2.0 + 2.0 * kPi * R;
+    d.mass = 3.0;
+    const BeltGuide loop[] = {meshing(head), meshing(tail)};
+    const BeltId belt = w.addBelt(d, loop);
+    const BodyId box = slab(w, Vec3{0.5, R + 0.1, 0}, Vec3{0.1, 0.1, 0.1}, 2.0);
+    drive(w, head.joint, 3.0, 1e4);
+    const Vec3 top = straight(w, belt, 1);
+    REQUIRE(top.x < -0.99);
+    for (int s = 0; s < 60; ++s) {
+        w.clearContacts();
+        const Vec3 c = w.position(box);
+        for (int k = 0; k < 4; ++k) {
+            Contact t;
+            t.a = box;
+            t.point = c + Vec3{k & 1 ? 0.1 : -0.1, -0.1, k & 2 ? 0.1 : -0.1};
+            t.b = t.point.x < 0.5 ? head.body : tail.body;
+            t.normal = Vec3{0, -1, 0};
+            t.depth = R - t.point.y;
+            t.feature = std::uint64_t(k);
+            t.belt = belt;
+            t.beltDirection = top;
+            w.addContact(t);
+        }
+        w.step(kDt);
+    }
+    CHECK(std::fabs(w.beltSpeed(belt) - 3.0 * R) < 1e-6);
+    CHECK_MESSAGE(std::fabs(dot(w.velocity(box), top) - w.beltSpeed(belt)) < 1e-3, "riding the belt");
+    CHECK(std::fabs(w.position(box).y - (R + 0.1)) < 0.005);
+}

@@ -28,6 +28,11 @@ namespace hf {
         double stiffness = 0.0;
         double damping = 0.0;
         double sinkLimit = 0.0;
+        // A belt touching a: b is the guide carrying that stretch of it, and beltDirection (world) the way it runs
+        // there at positive speed. The guide's axle carries the push; the belt, not the guide's spin, carries the
+        // friction along it. Never a mechanism contact; with the belt gone or broken, a contact on the guide.
+        BeltId belt;
+        Vec3 beltDirection{};
     };
 
     // What a contact pushed with over the last sub-step: the force on b through the point, and the torque on b that
