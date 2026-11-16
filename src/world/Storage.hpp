@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "contact/ContactParams.hpp"
+#include "hf/Belt.hpp"
 #include "hf/Body.hpp"
 #include "hf/Joint.hpp"
 #include "hf/Rope.hpp"
@@ -118,6 +119,41 @@ namespace hf {
         int machine = -2, row = -1, island = -1, held = -1;
         double length0 = 0.0; // as the step began: what a fault puts back
     };
+
+    // A belt: its guides as a closed route, each at its hinge's axle on the guide, its side taken about the belt's
+    // axis; and its one freedom, carried as a link of the machine its guides make (Machines.cpp).
+    struct BeltSlot {
+        BeltDesc desc;
+        std::vector<BeltGuide> guides;
+        std::vector<RopePoint> route;
+        std::vector<RopeBendState> bends;
+        // Per guide: where its teeth sat on the links the first step, as position less the guide's turn times its
+        // radius, wrapped to the pitch. NaN: none to keep, it slips or its teeth don't come out whole. Empty: not yet.
+        std::vector<double> phase;
+        std::uint32_t generation = 0;
+        bool alive = false;
+        bool placed = false; // its guides' wrap angles found once, from the loop as it lies
+
+        // On the carrier, from its body's origin in its axes (the world's, for none): the loop's middle, where its
+        // link turns, and the axis it runs round, positive the way it runs.
+        Vec3 middle{}, axis{};
+        double radius = 1.0; // m: 2A/L, so the link's angular momentum is a belt's of length L round area A
+        double span = 0.0;
+
+        double position = 0.0, speed = 0.0; // m, m/s along the loop
+        // This step: the machine whose solve holds it (-1: none moves), its link there, and that link's angle as
+        // the step began.
+        int machine = -1, link = -1;
+        double angle0 = 0.0;
+    };
+
+    // How far q turns about the unit axis a, in (-π, π]: its twist, whatever it swings besides.
+    inline double turnAbout(const Quat &q, const Vec3 &a) {
+        return std::remainder(2.0 * std::atan2(dot(Vec3{q.x, q.y, q.z}, a), q.w), 2.0 * std::numbers::pi);
+    }
+
+    // x brought within half a period of 0.
+    inline double wrapped(double x, double period) { return x - period * std::round(x / period); }
 
     // A rope's spools at work: paying out or winding in this step.
     inline bool reeling(const RopeSlot &r) { return r.lengthRate != 0.0; }

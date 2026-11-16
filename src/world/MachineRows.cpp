@@ -60,6 +60,12 @@ namespace hf {
                    (std::uint64_t(index) << 8) | slot;
         }
 
+        // A belt's, a guide each: the top two bits, which a rope's generation never reaches.
+        std::uint64_t tagOf(const BeltSlot &b, std::size_t index, std::size_t guide, std::uint64_t slot) {
+            return (std::uint64_t(3) << 62) | (std::uint64_t(b.generation & 0x3fffffu) << 40) |
+                   (std::uint64_t(index & 0xfffffu) << 20) | (std::uint64_t(guide & 0xfffu) << 8) | slot;
+        }
+
     } // namespace
 
     // Adds a machine's joint rows: velocity rows, position rows, or (for the line search) only their errors.
@@ -168,9 +174,21 @@ namespace hf {
             }
         }
 
+        // A group's link in this machine; -1 for one that doesn't move with it.
+        int linkOf(int group) const {
+            const Group &g = I.groups[std::size_t(group)];
+            return g.machine >= 0 && !g.frozen && &I.machines[std::size_t(g.machine)] == &md ? g.link : -1;
+        }
+
+        Quat turnOf(int group) const {
+            const int link = linkOf(group);
+            return link >= 0 ? md.m.art.links[std::size_t(link)].R : I.groups[std::size_t(group)].q;
+        }
+
         void closureRows(const JointRef &r);
         void actuatorRows(std::size_t ri);
         void ropeRows();
+        void beltRows();
     };
 
     // A cut joint's equalities.
@@ -393,6 +411,42 @@ namespace hf {
         }
     }
 
+    // A meshing guide is held to its belt by velocity alone, which drifts; whole teeth are also held in step with the
+    // links, or a sprocket creeps against the chain it carries.
+    void RowBuilder::beltRows() {
+        const Articulation &art = md.m.art;
+        for (const MachineData::BeltLink &bl : md.belts) {
+            const BeltSlot &b = I.belts[std::size_t(bl.belt)];
+            const int carrierGroup = I.carrierGroup(b), carrier = linkOf(carrierGroup);
+            const Link &own = art.links[std::size_t(bl.link)];
+            const Vec3 axis = own.R * kX;
+            const double run = b.position + b.radius * (art.q[std::size_t(own.coord)] - b.angle0);
+            const Quat carrierTurn = turnOf(carrierGroup);
+            for (std::size_t k = 0; k < b.guides.size(); ++k) {
+                const BeltGuide &g = b.guides[k];
+                if (!g.meshes) continue;
+                const int guideGroup = I.body(b.route[k].body)->group, guide = linkOf(guideGroup);
+                const double side = double(g.side);
+                const auto rate = [&](double *J) {
+                    art.addAngularRow(guide, axis, side * g.radius, J);
+                    art.addAngularRow(carrier, axis, -side * g.radius, J);
+                    art.addAngularRow(bl.link, axis, -b.radius, J);
+                    art.addAngularRow(carrier, axis, b.radius, J);
+                };
+                MachineRow row;
+                if (!position()) {
+                    rate(add(row, tagOf(b, std::size_t(bl.belt), k, 0), 0.0));
+                    continue;
+                }
+                if (!std::isfinite(b.phase[k])) continue;
+                const double turn = turnAbout(conjugate(carrierTurn) * turnOf(guideGroup), conjugate(carrierTurn) * axis);
+                const double behind = wrapped(side * g.radius * turn + b.phase[k] - run, b.desc.pitch);
+                row.target = std::clamp(-(kJointBeta / I.h) * behind, -kMaxPosBias, kMaxPosBias);
+                rate(add(row, tagOf(b, std::size_t(bl.belt), k, kPosBase), behind));
+            }
+        }
+    }
+
     namespace {
 
         using RowStates = std::vector<std::pair<std::uint64_t, RowState>>;
@@ -457,6 +511,7 @@ namespace hf {
             RowBuilder rb{I, md, RowBuilder::Mode::Measure};
             addJointRows(rb);
             rb.ropeRows();
+            rb.beltRows();
             double s = 0.0;
             for (double c : md.errors) s += c * c;
             return s;
@@ -532,6 +587,7 @@ namespace hf {
         RowBuilder rb{*this, md, RowBuilder::Mode::Velocity};
         addJointRows(rb);
         rb.ropeRows();
+        rb.beltRows();
         grabRows(md);
         contactRows(md);
         m.prepareRows();
@@ -551,6 +607,7 @@ namespace hf {
         RowBuilder rb{*this, md, RowBuilder::Mode::Position};
         addJointRows(rb);
         rb.ropeRows();
+        rb.beltRows();
         contactPositionRows(md);
         warmRows(*this, md.lastPos, md.posState, md.posTags);
         md.m.solvePositions(md.posState);

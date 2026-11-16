@@ -427,6 +427,7 @@ namespace hf {
         if (!j) return;
         wakeEnds(I, j->desc);
         I.touchJoint(j->desc);
+        I.removeBeltsOn(id);
         j->alive = false;
         ++j->generation;
         I.freeJoints.push_back(id.index);
@@ -592,6 +593,7 @@ namespace hf {
         s.bodies = int(impl_->bodies.size() - impl_->freeBodies.size());
         s.joints = int(impl_->joints.size() - impl_->freeJoints.size());
         s.ropes = int(impl_->ropes.size() - impl_->freeRopes.size());
+        s.belts = int(impl_->belts.size() - impl_->freeBelts.size());
         return s;
     }
 

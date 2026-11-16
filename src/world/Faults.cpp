@@ -85,7 +85,9 @@ namespace hf {
             for (std::size_t l = 0; l < art.links.size(); ++l)
                 for (int k = 0; k < art.links[l].ndof; ++k)
                     if (!finite(art.qdot[std::size_t(art.links[l].dof0 + k)]))
-                        fault(island, FaultKind::NonFinite, md.groupOfLink[l], BodyId{}, int(mi));
+                        // A belt's link has no group: its machine's root names it.
+                        fault(island, FaultKind::NonFinite, md.groupOf(l) >= 0 ? md.groupOf(l) : md.groupOfLink[0],
+                              BodyId{}, int(mi));
             for (const JointRef &r : md.joints) {
                 const JointDesc &d = joints[r.joint].desc;
                 if (!finite(joints[r.joint])) fault(island, FaultKind::NonFinite, -1, d.b.valid() ? d.b : d.a, int(mi));

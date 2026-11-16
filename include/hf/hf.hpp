@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hf/Belt.hpp"
 #include "hf/Body.hpp"
 #include "hf/Contact.hpp"
 #include "hf/Fault.hpp"

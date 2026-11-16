@@ -58,6 +58,13 @@ namespace hf {
         // The contacts it solves with its joints: between two of its links, or one and the static world.
         std::vector<int> contacts;
         std::vector<int> ropes; // the ropes it solves with its joints: every moving point of theirs is one of its links
+        // Its belts, each one's link after the groups' links: a belt's link stands for no group.
+        struct BeltLink {
+            int belt = 0;
+            int link = 0;
+        };
+        std::vector<BeltLink> belts;
+        int groupOf(std::size_t link) const { return link < groupOfLink.size() ? groupOfLink[link] : -1; }
         double correction = 0.0; // how far the position pass moved its links in the last sub-step, at most
         bool frozen = false;     // asleep this step, every link of it
 
@@ -276,7 +283,8 @@ namespace hf {
         std::vector<GrabSlot> grabs;
         std::vector<GrabPrep> grabPreps;
         std::vector<RopeSlot> ropes;
-        std::vector<std::uint32_t> freeBodies, freeJoints, freeGrabs, freeRopes;
+        std::vector<BeltSlot> belts;
+        std::vector<std::uint32_t> freeBodies, freeJoints, freeGrabs, freeRopes, freeBelts;
         std::vector<Group> groups; // 0: the world
         std::vector<MachineData> machines;
         std::vector<JointRef> looseSprings; // springs not inside one machine, solved in the contact sweep
@@ -377,6 +385,8 @@ namespace hf {
         const JointSlot *joint(JointId id) const;
         RopeSlot *rope(RopeId id);
         const RopeSlot *rope(RopeId id) const;
+        BeltSlot *belt(BeltId id);
+        const BeltSlot *belt(BeltId id) const;
         double jointPosition(const JointSlot &j) const; // from the bodies' poses
         double jointVelocity(const JointSlot &j) const; // from the bodies' velocities
         // A joint's frame on a body in the world, and how it moves: its point's velocity, its angular velocity.
@@ -440,6 +450,24 @@ namespace hf {
         void endRopes();                   // once the step is done: peaks, breaks
         void wakeRope(const RopeSlot &r);
         double ropeSpanIn(const RopeSlot &r, const MachineData &md); // with md's links where the line search put them
+
+        // Belts.cpp
+        void touchBelt(const BeltSlot &b); // the machines it makes, rebuilt before the next step
+        void wakeBelt(const BeltSlot &b);
+        int carrierGroup(const BeltSlot &b) const; // 0 for the world
+        // The groups a belt joins into one machine: its carrier's and its guides'; the static ones too.
+        void beltGroups(const BeltSlot &b, std::vector<int> &out) const;
+        void beginBelts();          // once a step, after the machines are read: which machine holds each, and where
+        void layBelt(BeltSlot &b);  // as it lies: its bends, its span
+        void placeTeeth(BeltSlot &b);
+        void measureBelts();        // each sub-step, before the machines' solves
+        void endBelts();            // once the step is done, faults put back: how far each has run
+        void removeBeltsOn(JointId hinge);
+        void dropBelt(std::uint32_t index);
+        // Where its link turns on its carrier's group, as a joint's end; and the link's state in the world, from the
+        // belt's position and speed and its carrier's pose: what readState reads.
+        End beltEnd(const BeltSlot &b) const;
+        void beltLinkState(const BeltSlot &b, Vec3 &c, Quat &R, Vec3 &v, Vec3 &w) const;
 
         // RigidRows.cpp
         void beginRigidRows();             // once a step, after beginContacts

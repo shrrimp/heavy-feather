@@ -301,6 +301,19 @@ namespace hf {
             }
         }
 
+        // A belt ties its carrier and every guide it runs round, as a joint does.
+        for (const BeltSlot &belt : belts) {
+            if (!belt.alive) continue;
+            const BodySlot *last = body(belt.desc.carrier);
+            if (last && groups[std::size_t(last->group)].isStatic) last = nullptr;
+            for (const RopePoint &p : belt.route) {
+                const BodySlot *b = body(p.body);
+                if (!b || groups[std::size_t(b->group)].isStatic) continue;
+                if (last) link(last, b, {.conducts = true, .jointed = true});
+                last = b;
+            }
+        }
+
         linkStart.assign(G + 1, 0);
         for (const SleepLink &l : sleepLinks) {
             ++linkStart[std::size_t(l.a) + 1];
@@ -361,6 +374,11 @@ namespace hf {
             const MachineData &md = machines[mi];
             bool working = md.correction >= kStillCorrection;
             for (const JointRef &r : md.joints) working = working || atWork(joints[r.joint]);
+            // A belt running on idle guides moves no body, but it is not still.
+            for (const MachineData::BeltLink &bl : md.belts) {
+                const double v = belts[std::size_t(bl.belt)].speed;
+                working = working || v * v >= kStillSpeed2;
+            }
             if (working) unitStill[G + mi] = 0;
         }
         for (const BodySlot &b : bodies) {

@@ -119,6 +119,7 @@ namespace hf {
         updateTurned();
         if (machinesPass) {
             measureRopes();
+            measureBelts();
             for (int mi : steppedMachines) solveInternal(machines[std::size_t(mi)]);
         }
         afterPhase(FaultPhase::Internal, i);
@@ -212,6 +213,7 @@ namespace hf {
 
         for (MachineData &md : machines)
             if (stepped(md)) readState(md);
+        beginBelts();
         beginFaults();
         beginDrives(dt);
         beginContacts();
@@ -264,6 +266,7 @@ namespace hf {
         // Nothing has read this step's state yet: an island gone wrong is put back before anything does.
         checkFaults(FaultPhase::EndOfStep);
         if (!faults.empty()) rollBack();
+        endBelts();
         endRopes();
         storeContacts();
         carriedRows.clear();

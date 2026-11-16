@@ -192,11 +192,11 @@ namespace hf {
             for (std::size_t l = 0; l < art.links.size(); ++l) {
                 Link &L = art.links[l];
                 // This link's own end of its joint, and its children's ends on it, both measured from its centre.
-                if (md.groupOfLink[l] == gi) {
+                if (md.groupOf(l) == gi) {
                     L.pc -= inGroup;
                     L.c = g.c;
                 }
-                if (L.parent >= 0 && md.groupOfLink[std::size_t(L.parent)] == gi) L.pp -= inGroup;
+                if (L.parent >= 0 && md.groupOf(std::size_t(L.parent)) == gi) L.pp -= inGroup;
             }
             // Rooted on it, as on the ground: its root ends shift, and its pose as an anchor is where it now is.
             for (Anchor &a : md.anchors) {

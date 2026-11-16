@@ -4,6 +4,7 @@
 #include <memory>
 #include <span>
 
+#include "hf/Belt.hpp"
 #include "hf/Body.hpp"
 #include "hf/Contact.hpp"
 #include "hf/Export.hpp"
@@ -51,7 +52,7 @@ namespace hf {
     };
 
     struct WorldStats {
-        int bodies = 0, joints = 0, contacts = 0, ropes = 0;
+        int bodies = 0, joints = 0, contacts = 0, ropes = 0, belts = 0;
         int machines = 0, links = 0, dofs = 0, rows = 0;
         int lcpPivots = 0, lcpFallbacks = 0;
         int stepped = 0, asleep = 0; // bodies
@@ -200,6 +201,23 @@ namespace hf {
         int ropePath(RopeId rope, std::span<RopeBend> out) const;
         // The ropes the last step broke. They stay in the world, slack, until the host removes or mends them.
         std::span<const RopeId> brokenRopes() const;
+
+        // A belt round its guides, in the order it runs round them, its sides and radii as given. Refused: fewer than
+        // two guides, a hinge that is gone or isn't one that turns, guides whose axes aren't parallel, a carrier that
+        // is gone, a radius, length or mass not positive, a pitch, stiffness, strength, damping or friction negative
+        // or NaN, a side other than ±1.
+        BeltId addBelt(const BeltDesc &desc, std::span<const BeltGuide> loop);
+        void removeBelt(BeltId belt);
+        bool contains(BeltId belt) const;
+        // Its length, mass, teeth and stiffness from the next step; a broken belt is mended.
+        bool setBelt(BeltId belt, const BeltDesc &desc);
+        BeltDesc beltDesc(BeltId belt) const;
+        double beltPosition(BeltId belt) const; // m along the loop since it was added: where its links are now
+        double beltSpeed(BeltId belt) const;    // m/s, positive the way its guides are listed
+        double beltTension(BeltId belt) const;  // N, over the last sub-step
+        BeltInfo beltInfo(BeltId belt) const;
+        // The belt round its guides as the last step solved it, one bend a guide: the number written.
+        int beltPath(BeltId belt, std::span<RopeBend> out) const;
 
         // The contacts for the next step. They are refreshed from their body-local points every sub-step, so the
         // host only detects once per step.

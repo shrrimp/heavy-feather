@@ -162,8 +162,26 @@ namespace hf {
 
     namespace {
 
+        // A belt's link: a wheel on its carrier at the loop's middle, its angle the belt's position over its radius.
+        Link beltLink(const World::Impl &I, const BeltSlot &b, int parent) {
+            const End e = I.beltEnd(b);
+            Link L;
+            L.parent = parent;
+            L.kind = JointKind::Revolute;
+            L.pp = e.anchor;
+            L.Qp = e.frame;
+            if (parent < 0) {
+                L.anchorPos = I.groups[std::size_t(e.group)].c;
+                L.anchorRot = I.groups[std::size_t(e.group)].q;
+            }
+            L.mass = b.desc.mass;
+            const double turn = b.desc.mass * b.radius * b.radius;
+            L.inertiaBody = Mat3(turn, 0, 0, 0, 0.5 * turn, 0, 0, 0, 0.5 * turn);
+            return L;
+        }
+
         void buildMachine(World::Impl &I, MachineData &md, const std::vector<int> &groupsOf,
-                          std::vector<JointRef> &refs) {
+                          std::vector<JointRef> &refs, const std::vector<int> &belts) {
             // Local nodes: 0..K-1 the machine's groups, K the world.
             std::unordered_map<int, int> local;
             for (std::size_t i = 0; i < groupsOf.size(); ++i) local[groupsOf[i]] = int(i);
@@ -274,6 +292,15 @@ namespace hf {
             }
             for (std::size_t head = 0; head < queue.size(); ++head)
                 visit(queue[head], linkOfNode[std::size_t(queue[head])]);
+            md.belts.clear();
+            for (int bi : belts) {
+                const BeltSlot &b = I.belts[std::size_t(bi)];
+                const End e = I.beltEnd(b);
+                const int parent = e.isStatic ? -1 : linkOfNode[std::size_t(local.at(e.group))];
+                if (parent < 0) md.anchors.push_back({e.group, int(art.links.size())});
+                md.belts.push_back({bi, int(art.links.size())});
+                art.links.push_back(beltLink(I, b, parent));
+            }
             art.finalise();
 
             for (JointRef &r : refs) {
@@ -320,6 +347,34 @@ namespace hf {
 
     } // namespace
 
+    namespace {
+
+        // A belt's groups make one machine: one of them rebuilt rebuilds them all, and the machines they were in.
+        void redoBeltMachines(World::Impl &I, std::vector<std::uint8_t> &redo) {
+            std::vector<int> mine;
+            for (bool grew = true; grew;) {
+                grew = false;
+                for (const BeltSlot &b : I.belts) {
+                    if (!b.alive) continue;
+                    I.beltGroups(b, mine);
+                    const auto rebuilt = [&](int g) { return g > 0 && redo[std::size_t(g)]; };
+                    if (std::none_of(mine.begin(), mine.end(), rebuilt)) continue;
+                    for (int g : mine) {
+                        if (g <= 0 || redo[std::size_t(g)]) continue;
+                        redo[std::size_t(g)] = 1;
+                        grew = true;
+                        const int m = I.groups[std::size_t(g)].machine;
+                        if (m < 0 || I.machineMark[std::size_t(m)]) continue;
+                        I.machineMark[std::size_t(m)] = 1;
+                        for (int h : I.machines[std::size_t(m)].groupOfLink)
+                            if (h > 0 && I.groups[std::size_t(h)].members > 0) redo[std::size_t(h)] = 1;
+                    }
+                }
+            }
+        }
+
+    } // namespace
+
     // Rebuilds the machines of the touched groups, or every machine after a full rebuild of the groups. A machine
     // holding a touched group is taken apart, and its groups and the touched ones are put back together into
     // machines anew; every other machine stays as it was, its rows warm.
@@ -341,6 +396,7 @@ namespace hf {
                 if (machineMark[mi])
                     for (int g : machines[mi].groupOfLink)
                         if (g == 0 || groups[std::size_t(g)].members > 0) redo[std::size_t(g)] = 1;
+            redoBeltMachines(*this, redo);
         }
         touched.clear();
         touchedMachines.clear();
@@ -412,6 +468,23 @@ namespace hf {
             const std::size_t a = findRoot(uf, std::size_t(r.A.group)), b = findRoot(uf, std::size_t(r.B.group));
             if (a != b) uf[std::max(a, b)] = std::min(a, b);
         }
+        // A belt joins its carrier and its guides as a joint would: every moving one of them, one machine.
+        std::vector<int> mine;
+        for (const BeltSlot &b : belts) {
+            if (!b.alive) continue;
+            beltGroups(b, mine);
+            std::size_t joined = nG;
+            for (int g : mine) {
+                if (g < 0 || groups[std::size_t(g)].isStatic) continue;
+                inMachine[std::size_t(g)] = 1;
+                const std::size_t root = findRoot(uf, std::size_t(g));
+                if (joined == nG) joined = root;
+                else if (root != joined) {
+                    uf[std::max(root, joined)] = std::min(root, joined);
+                    joined = std::min(root, joined);
+                }
+            }
+        }
         std::vector<int> machineOfRoot(nG, -1);
         std::vector<std::vector<int>> groupsOf;
         for (std::size_t g = 0; g < nG; ++g) {
@@ -447,13 +520,25 @@ namespace hf {
             looseSprings.push_back(r);
         }
 
+        // Each belt goes to the machine its moving groups now make.
+        std::vector<std::vector<int>> beltsOf(groupsOf.size());
+        for (std::size_t bi = 0; bi < belts.size(); ++bi) {
+            if (!belts[bi].alive) continue;
+            beltGroups(belts[bi], mine);
+            for (int g : mine) {
+                if (g < 0 || groups[std::size_t(g)].isStatic || !redo[std::size_t(g)]) continue;
+                beltsOf[std::size_t(machineOfRoot[findRoot(uf, std::size_t(g))])].push_back(int(bi));
+                break;
+            }
+        }
+
         const std::size_t first = machines.size();
         machines.resize(first + groupsOf.size());
         for (std::size_t k = 0; k < groupsOf.size(); ++k) {
             const std::size_t mi = first + k;
             MachineData &md = machines[mi];
             md = MachineData{};
-            buildMachine(*this, md, groupsOf[k], refsOf[k]);
+            buildMachine(*this, md, groupsOf[k], refsOf[k], beltsOf[k]);
             for (std::size_t l = 0; l < md.groupOfLink.size(); ++l) {
                 Group &g = groups[std::size_t(md.groupOfLink[l])];
                 g.machine = int(mi);
@@ -465,7 +550,7 @@ namespace hf {
                 info.tree = r.tree;
                 info.duplicate = r.duplicate;
             }
-            md.fext.assign(md.groupOfLink.size(), Force{});
+            md.fext.assign(md.m.art.links.size(), Force{});
         }
         machineRebuilds += int(groupsOf.size());
     }
@@ -502,16 +587,20 @@ namespace hf {
             L.anchorRot = groups[std::size_t(a.group)].q;
         }
         const std::size_t n = md.groupOfLink.size();
-        md.c.resize(n);
-        md.R.resize(n);
-        md.v.resize(n);
-        md.w.resize(n);
+        md.c.resize(n + md.belts.size());
+        md.R.resize(n + md.belts.size());
+        md.v.resize(n + md.belts.size());
+        md.w.resize(n + md.belts.size());
         for (std::size_t i = 0; i < n; ++i) {
             const Group &g = groups[std::size_t(md.groupOfLink[i])];
             md.c[i] = g.c;
             md.R[i] = g.q;
             md.v[i] = g.v;
             md.w[i] = g.w;
+        }
+        for (const MachineData::BeltLink &bl : md.belts) {
+            const std::size_t i = std::size_t(bl.link);
+            beltLinkState(belts[std::size_t(bl.belt)], md.c[i], md.R[i], md.v[i], md.w[i]);
         }
         md.m.art.setFromMaximal(md.c, md.R, md.v, md.w);
         writePoses(md);
