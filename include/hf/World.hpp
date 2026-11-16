@@ -217,6 +217,8 @@ namespace hf {
         BeltDesc beltDesc(BeltId belt) const;
         double beltPosition(BeltId belt) const; // m along the loop since it was added: where its links are now
         double beltSpeed(BeltId belt) const;    // m/s, positive the way its guides are listed
+        // Its links put where they were and set running as they ran: a rewind's, with its guides' poses.
+        bool setBeltMotion(BeltId belt, double position, double speed);
         double beltTension(BeltId belt) const;  // N, over the last sub-step
         BeltInfo beltInfo(BeltId belt) const;
         // The belt round its guides as the last step solved it, one bend a guide: the number written.

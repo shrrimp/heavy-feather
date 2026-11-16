@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -153,6 +154,12 @@ namespace hf {
         std::vector<double> spinCaps;
         std::vector<double> grip; // N, each guide's push from the contacts it carries
         int slipping = 0;
+        // N: an elastic belt's pull from its stretch alone. On guides that can't move apart its length row has nothing
+        // to pull, and this is the tension it grips with.
+        double stretched() const {
+            if (!std::isfinite(desc.stiffness)) return 0.0;
+            return desc.stiffness * std::max(0.0, span - desc.length) / std::max(desc.length, 1e-3);
+        }
         bool broken = false;
     };
 

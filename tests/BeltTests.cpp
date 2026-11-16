@@ -156,6 +156,106 @@ TEST_CASE("a belt goes with a guide's hinge, and with a guide removed") {
     b.w.step(kDt);
 }
 
+TEST_CASE("a guide held to its machine by the belt alone floats with it, and the machine runs") {
+    World w;
+    BodyDesc fd;
+    fd.position = Vec3{0.5, 0, 0};
+    fd.mass = 50.0;
+    fd.inertia = Mat3(5.0);
+    const BodyId frame = w.addBody(fd);
+    const BodyId small = wheel(w, Vec3{0, 0, 0}, pitchRadius(12));
+    const JointId motor = w.addJoint(jointAt(w, JointType::Motor, frame, small, Vec3{0, 0, 0}, kZ));
+    // A road-wheel arm whose own pin is gone: its wheel's hinge is to the arm, and nothing holds the arm.
+    BodyDesc ad;
+    ad.position = Vec3{1, 0, 0};
+    ad.mass = 5.0;
+    ad.inertia = Mat3(0.5);
+    const BodyId arm = w.addBody(ad);
+    const BodyId large = wheel(w, Vec3{1, 0, 0}, pitchRadius(30));
+    // Braked: a drive's row is what reaches for the joint's place in the machine's tree.
+    const JointId hinge = w.addJoint(jointAt(w, JointType::Motor, arm, large, Vec3{1, 0, 0}, kZ));
+    drive(w, hinge, 0.0, 5.0);
+    BeltDesc d;
+    d.carrier = frame;
+    d.length = 3.0;
+    d.mass = 2.0;
+    d.pitch = kPitch;
+    const BeltGuide loop[] = {meshing({small, motor, pitchRadius(12)}), meshing({large, hinge, pitchRadius(30)})};
+    REQUIRE(w.contains(w.addBelt(d, loop)));
+    drive(w, motor, 3.0, 50.0);
+    for (int i = 0; i < 240; ++i) w.step(kDt);
+    const Vec3 p = w.position(arm);
+    CHECK(std::isfinite(p.x));
+    CHECK(std::isfinite(p.y));
+    CHECK(w.jointInfo(motor).machine == w.jointInfo(hinge).machine);
+}
+
+TEST_CASE("a belt goes with its carrier, and with its guide's hinge moved to another body") {
+    World w;
+    BodyDesc fd;
+    fd.position = Vec3{0.5, 0, 0};
+    fd.mass = 50.0;
+    fd.inertia = Mat3(5.0);
+    const BodyId frame = w.addBody(fd);
+    const Guide a{wheel(w, Vec3{0, 0, 0}, pitchRadius(12)), {}, pitchRadius(12)};
+    const Guide b{wheel(w, Vec3{1, 0, 0}, pitchRadius(30)), {}, pitchRadius(30)};
+    Guide ga = a, gb = b;
+    ga.joint = w.addJoint(jointAt(w, JointType::Hinge, frame, a.body, Vec3{0, 0, 0}, kZ));
+    gb.joint = w.addJoint(jointAt(w, JointType::Hinge, frame, b.body, Vec3{1, 0, 0}, kZ));
+    BeltDesc d;
+    d.carrier = frame;
+    d.length = 3.0;
+    d.mass = 2.0;
+    const BeltGuide loop[] = {meshing(ga), meshing(gb)};
+    const BeltId one = w.addBelt(d, loop);
+    REQUIRE(w.contains(one));
+    w.step(kDt);
+    JointDesc moved = w.jointDesc(gb.joint);
+    moved.b = a.body;
+    w.setJoint(gb.joint, moved);
+    CHECK(!w.contains(one));
+    w.step(kDt);
+
+    World v;
+    const BodyId frame2 = v.addBody(fd);
+    const BodyId wa = wheel(v, Vec3{0, 0, 0}, pitchRadius(12)), wb = wheel(v, Vec3{1, 0, 0}, pitchRadius(30));
+    BodyDesc ad;
+    ad.position = Vec3{1, 0, 0};
+    ad.mass = 5.0;
+    ad.inertia = Mat3(0.5);
+    const BodyId arm = v.addBody(ad);
+    const Guide va{wa, v.addJoint(jointAt(v, JointType::Hinge, frame2, wa, Vec3{0, 0, 0}, kZ)), pitchRadius(12)};
+    const Guide vb{wb, v.addJoint(jointAt(v, JointType::Hinge, arm, wb, Vec3{1, 0, 0}, kZ)), pitchRadius(30)};
+    v.addJoint(jointAt(v, JointType::Hinge, frame2, arm, Vec3{1, 0.2, 0}, kZ));
+    d.carrier = frame2;
+    const BeltGuide loop2[] = {meshing(va), meshing(vb)};
+    const BeltId three = v.addBelt(d, loop2);
+    REQUIRE(v.contains(three));
+    v.step(kDt);
+    v.removeBody(frame2);
+    CHECK(!v.contains(three));
+    v.step(kDt);
+}
+
+TEST_CASE("a chain put back with its sprockets by setBeltMotion runs on as it ran from there") {
+    ChainDrive c(JointType::Motor, JointType::Hinge);
+    drive(c.w, c.small.joint, 3.0, 20.0);
+    for (int i = 0; i < 60; ++i) c.w.step(kDt);
+    const BodyState small = c.w.state(c.small.body), large = c.w.state(c.large.body);
+    const double position = c.w.beltPosition(c.chain), speed = c.w.beltSpeed(c.chain);
+    c.w.step(kDt);
+    const double next = c.w.beltSpeed(c.chain);
+    for (int i = 0; i < 90; ++i) c.w.step(kDt);
+    for (const auto &[body, was] : {std::pair{c.small.body, small}, std::pair{c.large.body, large}}) {
+        c.w.setPose(body, was.position, was.orientation);
+        c.w.setVelocity(body, was.velocity, was.angularVelocity);
+    }
+    CHECK(c.w.setBeltMotion(c.chain, position, speed));
+    c.w.step(kDt);
+    CHECK(c.w.beltSpeed(c.chain) == doctest::Approx(next).epsilon(1e-3));
+    CHECK(!c.w.setBeltMotion(c.chain, std::numeric_limits<double>::quiet_NaN(), 0.0));
+}
+
 TEST_CASE("belts the world can't use are refused") {
     World w;
     const Guide a = guideAt(w, JointType::Hinge, Vec3{0, 0, 0}, 0.2), b = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, 0.2);

@@ -292,6 +292,15 @@ namespace hf {
             }
             for (std::size_t head = 0; head < queue.size(); ++head)
                 visit(queue[head], linkOfNode[std::size_t(queue[head])]);
+            // A group no joint reaches, held to the rest by a belt alone, floats on a root of its own.
+            for (int nd = 0; nd < K; ++nd) {
+                if (seen[std::size_t(nd)]) continue;
+                seen[std::size_t(nd)] = 1;
+                addLink(nd, -1, nullptr, true);
+                queue.push_back(nd);
+                for (std::size_t head = queue.size() - 1; head < queue.size(); ++head)
+                    visit(queue[head], linkOfNode[std::size_t(queue[head])]);
+            }
             md.belts.clear();
             for (int bi : belts) {
                 const BeltSlot &b = I.belts[std::size_t(bi)];

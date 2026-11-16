@@ -418,7 +418,10 @@ namespace hf {
         const Articulation &art = md.m.art;
         for (const MachineData::BeltLink &bl : md.belts) {
             BeltSlot &b = I.belts[std::size_t(bl.belt)];
-            if (mode == Mode::Velocity) b.row = -1;
+            if (mode == Mode::Velocity) {
+                b.row = -1;
+                b.spinRows.clear();
+            }
             if (b.broken) continue;
             beltLengthRow(b, std::size_t(bl.belt));
             const int carrierGroup = I.carrierGroup(b), carrier = linkOf(carrierGroup);
@@ -445,7 +448,7 @@ namespace hf {
                     // It turns with the belt only as far as the belt presses on it: tension round its wrap, and what
                     // its contacts push it into the belt with.
                     if (mode != Mode::Velocity) continue;
-                    const double wrap = b.bends[k].touching ? b.force * b.bends[k].theta : 0.0;
+                    const double wrap = b.bends[k].touching ? std::max(b.force, b.stretched()) * b.bends[k].theta : 0.0;
                     const double grip = k < b.grip.size() ? b.grip[k] : 0.0;
                     const double cap = g.friction * (wrap + grip) * I.h;
                     if (!(cap > 0.0)) continue;

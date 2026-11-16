@@ -218,7 +218,7 @@ namespace hf {
         const auto at = [&](int row) { return row >= 0 && std::size_t(row) < lambda.size() ? lambda[std::size_t(row)] : 0.0; };
         for (const MachineData::BeltLink &bl : md.belts) {
             BeltSlot &b = belts[std::size_t(bl.belt)];
-            b.force = at(b.row) / h;
+            b.force = std::max(at(b.row) / h, b.stretched());
             b.peak = std::max(b.peak, b.force);
             b.slipping = 0;
             for (std::size_t k = 0; k < b.spinRows.size(); ++k)
@@ -343,7 +343,11 @@ namespace hf {
         b.phase.clear();
         b.placed = true;
         b.span = span;
-        b.radius = 2.0 * area / span;
+        // 2A/L, but never below its smallest guide's radius: a loop crossed on itself encloses next to nothing, and its
+        // link would turn without bound.
+        double smallest = loop[0].radius;
+        for (const BeltGuide &g : loop) smallest = std::min(smallest, g.radius);
+        b.radius = std::max(2.0 * area / span, smallest);
         b.middle = conjugate(q) * (middle - c);
         b.axis = conjugate(q) * axis;
         return true;
@@ -428,6 +432,16 @@ namespace hf {
     double World::beltPosition(BeltId id) const {
         const BeltSlot *b = impl_->belt(id);
         return b ? b->position : 0.0;
+    }
+
+    bool World::setBeltMotion(BeltId id, double position, double speed) {
+        BeltSlot *b = impl_->belt(id);
+        if (!b) return false;
+        if (!std::isfinite(position) || !std::isfinite(speed)) return impl_->reject(false);
+        b->position = position;
+        b->speed = speed;
+        impl_->wakeBelt(*b);
+        return true;
     }
 
     double World::beltSpeed(BeltId id) const {

@@ -178,6 +178,9 @@ namespace hf {
         }
         for (std::uint32_t k = 0; k < I.grabs.size(); ++k)
             if (I.grabs[k].alive && I.grabs[k].body == id) release({k, I.grabs[k].generation});
+        // A belt's motion is measured on its carrier: gone, so is the belt.
+        for (std::uint32_t k = 0; k < I.belts.size(); ++k)
+            if (I.belts[k].alive && I.belts[k].desc.carrier == id) I.dropBelt(k);
         for (std::uint32_t k = 0; k < I.ropes.size(); ++k) {
             const RopeSlot &r = I.ropes[k];
             if (!r.alive) continue;
@@ -445,6 +448,13 @@ namespace hf {
         wakeEnds(I, desc);
         const bool reshape = !sameShape(j->desc, desc);
         const double target = j->desc.target;
+        // A guide's hinge on other bodies, in another place, or made one that doesn't turn: the belts round it go, to
+        // be made again round it as it is.
+        const bool turning = desc.type == JointType::Hinge || desc.type == JointType::Motor ||
+                             desc.type == JointType::AngularSpring || desc.type == JointType::Servo;
+        if (!(j->desc.a == desc.a) || !(j->desc.b == desc.b) || !(j->desc.frameA == desc.frameA) ||
+            !(j->desc.frameB == desc.frameB) || !turning)
+            I.removeBeltsOn(id);
         if (reshape) I.touchJoint(j->desc);
         j->desc = desc;
         if (reshape) {
