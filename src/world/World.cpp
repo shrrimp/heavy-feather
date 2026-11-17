@@ -331,6 +331,8 @@ namespace hf {
         BodySlot *b = I.body(id);
         if (!b) return false;
         if (!finite(position) || !rotation(orientation)) return I.reject(false);
+        // A weld cut since the last step still holds its group: split it first, or the move carries the other half.
+        if (I.dirty) I.build();
         const Quat qb = normalize(orientation);
         const Vec3 centre = position + qb * b->desc.centerOfMass;
         // A host writing back the pose it read isn't a push: only a real move wakes it.

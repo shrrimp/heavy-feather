@@ -88,6 +88,20 @@ TEST_CASE("a static body let go and thrown in the same step leaves at the throw"
     }
 }
 
+TEST_CASE("a weld cut and one half placed in the same step leaves the other half where it was") {
+    // The group the weld made was split only at the step, after the pose had moved it whole: an editor's undo of a
+    // weld that also put a part back dragged the other part along.
+    World w(weightless());
+    const BodyId a = addCube(w, Vec3{0, 0, 0}), b = addCube(w, Vec3{1, 0, 0});
+    const JointId weld = w.addJoint(jointAt(w, JointType::Fixed, a, b, Vec3{0.5, 0, 0}, kZ));
+    w.step(kDt);
+    w.removeJoint(weld);
+    w.setPose(a, Vec3{5, 0, 0}, Quat{});
+    w.step(kDt);
+    CHECK_MESSAGE(length(w.position(b) - Vec3{1, 0, 0}) < 1e-9, "the other half stays");
+    CHECK_MESSAGE(length(w.position(a) - Vec3{5, 0, 0}) < 1e-9, "the half placed is where it was put");
+}
+
 TEST_CASE("a static body let go and placed in the same step starts from there") {
     World w(weightless());
     const BodyId cube = addCube(w, Vec3{0, 1, 0}, true);
