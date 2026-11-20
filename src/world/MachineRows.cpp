@@ -39,6 +39,7 @@ namespace hf {
             kStopLo = 14,
             kStopHi = 15,
             kCone = 16,
+            kFriction = 17, // a ball's three: 17, 18, 19
             kPosBase = 32,
         };
 
@@ -340,6 +341,26 @@ namespace hf {
         }
 
         if (position()) return;
+
+        if (d.friction > 0.0) {
+            MachineRow row;
+            row.lo = -d.friction * h;
+            row.hi = d.friction * h;
+            row.relEps = 1e-7;
+            if (hinged(d.type) || d.type == JointType::Servo) {
+                hingeRateRow(r, 1.0, add(row, tagOf(j, r.joint, kFriction), 0.0));
+            } else if (d.type == JointType::Slider || d.type == JointType::Piston) {
+                sliderRateRow(r, 1.0, add(row, tagOf(j, r.joint, kFriction), 0.0));
+            } else if (d.type == JointType::Ball) {
+                const Quat qA = endFrame(r.A, r.linkA);
+                const Vec3 axes[3] = {kX, kY, kZ};
+                for (int k = 0; k < 3; ++k) {
+                    double *J = add(row, tagOf(j, r.joint, kFriction + std::uint64_t(k)), 0.0);
+                    m.art.addAngularRow(r.linkB, qA * axes[k], 1.0, J);
+                    m.art.addAngularRow(r.linkA, qA * axes[k], -1.0, J);
+                }
+            }
+        }
 
         if (d.type == JointType::AngularSpring) {
             std::vector<double> &J = md.row;

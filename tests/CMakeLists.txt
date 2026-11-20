@@ -28,6 +28,7 @@ set(HF_TEST_SOURCES
   EditTests.cpp
   FaultTests.cpp
   FixedRotationTests.cpp
+  FrictionTests.cpp
   GrabTests.cpp
   GravityScaleTests.cpp
   HostMoveTests.cpp

@@ -49,6 +49,9 @@ namespace hf {
         // speed it struck at it leaves with, 0 dead to 1 elastic, [0, 1]. Struck slower than kStopBounceSpeed, a stop
         // holds without a bounce. Its impulse is a row's between the two bodies, so the other takes its share.
         double bounce = 0.0;
+        // What it takes to move it, N along a slider or a piston, N·m about a turning joint's axis or each of a ball's.
+        // Pushed less, it holds still. 0: free.
+        double friction = 0.0;
 
         double hertz = 0.0, damping = 1.0; // Spring and AngularSpring; 0 Hz is a rod, as stiff as a contact
         double restLength = 0.0;           // Spring

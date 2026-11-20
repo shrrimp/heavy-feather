@@ -72,8 +72,9 @@ namespace hf {
                    nonNegative(d.damping) && nonNegative(d.restLength) && !std::isnan(d.min) && !std::isnan(d.max) &&
                    d.min <= d.max && !std::isnan(d.lowerAngle) && !std::isnan(d.upperAngle) &&
                    d.lowerAngle <= d.upperAngle && withinTurn(d.lowerAngle, d.upperAngle) &&
-                   (d.type != JointType::Servo || withinTurn(d.min, d.max)) && nonNegative(d.coneAngle, true) && finite(d.coneAxis) &&
-                   length(d.coneAxis) > 1e-9 && nonNegative(d.bounce) && d.bounce <= 1.0;
+                   (d.type != JointType::Servo || withinTurn(d.min, d.max)) && nonNegative(d.coneAngle, true) &&
+                   finite(d.coneAxis) && length(d.coneAxis) > 1e-9 && nonNegative(d.bounce) && d.bounce <= 1.0 &&
+                   nonNegative(d.friction);
         }
 
         bool usable(const Contact &k) {
