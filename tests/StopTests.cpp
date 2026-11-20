@@ -200,7 +200,8 @@ TEST_CASE("a cone turns with the link it is on") {
         const Vec3 xB = w.orientation(lower) * j.frameB.rotation * Vec3{1, 0, 0};
         widest = std::max(widest, between(xA, xB));
     }
-    CHECK_MESSAGE(widest < 0.26 + 0.01, "the lower arm never swings more than 0.01 rad past its cone, its link turning");
+    CHECK_MESSAGE(widest < 0.26 + 0.01,
+                  "the lower arm never swings more than 0.01 rad past its cone, its link turning");
     CHECK_MESSAGE(widest > 0.25, "and reaches it");
 }
 
@@ -230,7 +231,8 @@ TEST_CASE("a cone stops a swing inside the machine: the pair keeps its spin") {
         for (int i = 0; i < 2; ++i) {
             const Mat3 R = toMat3(w.orientation(bodies[i]));
             const Mat3 I = R * boxInertia(mass[i], Vec3{0.75, 0.1, 0.1}) * transpose(R);
-            L += I * w.angularVelocity(bodies[i]) + mass[i] * cross(w.position(bodies[i]) - c, w.velocity(bodies[i]) - v);
+            L += I * w.angularVelocity(bodies[i]) +
+                 mass[i] * cross(w.position(bodies[i]) - c, w.velocity(bodies[i]) - v);
         }
         return L;
     };
@@ -292,7 +294,8 @@ TEST_CASE("a window round the back of the turn lets it through the half turn and
             highest = std::max(highest, w.jointPosition(a.joint));
         }
         const double end = spin > 0.0 ? 5.0 : -1.0;
-        CHECK_MESSAGE(std::fabs(w.jointPosition(a.joint) - end) < 0.02, "spun either way, it comes to rest on that end");
+        CHECK_MESSAGE(std::fabs(w.jointPosition(a.joint) - end) < 0.02,
+                      "spun either way, it comes to rest on that end");
         if (spin > 0.0) CHECK_MESSAGE(highest > kPi + 1.0, "counted past the half turn, not wrapped round to minus");
         CHECK_MESSAGE(lowest > -1.0 - 0.02, "and never into the gap");
         CHECK_MESSAGE(highest < 5.0 + 0.02, "from either side");
@@ -397,7 +400,8 @@ TEST_CASE("a stop's bounce is between the two: a free pair keeps its spin, and t
         for (int i = 0; i < 2; ++i) {
             const Mat3 R = toMat3(w.orientation(bodies[i]));
             const Mat3 I = R * boxInertia(mass[i], Vec3{0.75, 0.1, 0.1}) * transpose(R);
-            L += I * w.angularVelocity(bodies[i]) + mass[i] * cross(w.position(bodies[i]) - c, w.velocity(bodies[i]) - v);
+            L += I * w.angularVelocity(bodies[i]) +
+                 mass[i] * cross(w.position(bodies[i]) - c, w.velocity(bodies[i]) - v);
         }
         return L;
     };
@@ -413,7 +417,8 @@ TEST_CASE("a stop's bounce is between the two: a free pair keeps its spin, and t
         last = now;
     }
     CHECK_MESSAGE(struck, "the pair turns into the stop and back off it");
-    CHECK_MESSAGE(length(spinOf() - L0) < 1e-3 * length(L0), "and what it turns with as a whole is what it was, to 0.1%");
+    CHECK_MESSAGE(length(spinOf() - L0) < 1e-3 * length(L0),
+                  "and what it turns with as a whole is what it was, to 0.1%");
     CHECK_MESSAGE(after < 0.0, "turning apart after it");
     CHECK_MESSAGE(std::fabs(-after / before - 0.6) < 0.06, "at 0.6 of what it turned together at");
 }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <limits>
 
 #include "hf/Types.hpp"
@@ -16,7 +15,7 @@ namespace hf {
         double friction = 0.6; // against the belt, for one that doesn't mesh
     };
 
-    // A closed loop of fixed length round its guides: a track round its rollers, a chain round its sprockets, a
+    // A closed loop round its guides: a track round its rollers, a chain round its sprockets, a
     // conveyor. Its one freedom is its speed along the loop, positive the way its guides are listed. It turns the
     // guides that mesh with it and the others as far as their friction on it allows, so a motor on one guide drives
     // the rest through it.
@@ -28,7 +27,7 @@ namespace hf {
         // never drifts against the links it carries. 0: no teeth to keep.
         double pitch = 0.0;
         double stiffness = std::numeric_limits<double>::infinity(); // N: its EA; infinite, it never stretches
-        double damping = 1.0;                                        // a stretchy belt's damping ratio
+        double damping = 1.0;                                       // a stretchy belt's damping ratio
         double strength = std::numeric_limits<double>::infinity();  // N: past it the belt breaks
     };
 

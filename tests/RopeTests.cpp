@@ -392,7 +392,8 @@ TEST_CASE("a route's span lays where it runs as a step would, and follows a body
     CHECK(length(laid[2].in - to) < 1e-9);
     CHECK(std::fabs(length(laid[1].out) - r) < 1e-9);
     CHECK(std::fabs(dot(laid[1].out, to - laid[1].out)) < 1e-9);
-    CHECK(std::fabs(span - (3.0 + length(to - laid[1].out) + r * std::acos(dot(laid[1].in, laid[1].out) / (r * r)))) < 1e-9);
+    CHECK(std::fabs(span - (3.0 + length(to - laid[1].out) + r * std::acos(dot(laid[1].in, laid[1].out) / (r * r)))) <
+          1e-9);
 }
 
 TEST_CASE("an Atwood machine over a sheave: half a turn of rope round it, the same motion") {
@@ -547,7 +548,8 @@ TEST_CASE("a spool lifts a crate off the floor: the floor lets go of it as the r
     d.spool = RopeSpool::Start;
     d.speed = 0.25;
     d.maxForce = 2e4;
-    const RopeId r = h.world.addRope(d, std::vector<RopePoint>{fixedAt(Vec3{0, 5, 0}), on(h.world, crate, Vec3{0, 1, 0})});
+    const RopeId r =
+        h.world.addRope(d, std::vector<RopePoint>{fixedAt(Vec3{0, 5, 0}), on(h.world, crate, Vec3{0, 1, 0})});
     for (int s = 0; s < 60; ++s) h.step(kDt);
     CHECK_MESSAGE(h.world.ropeTension(r) == 0.0, "slack, the crate stands on the floor");
     h.world.setSpoolLever(r, -1.0);
@@ -591,7 +593,8 @@ TEST_CASE("a crane jib on a capped cylinder hoists a load from its tip over a sh
     RopePoint tip = on(h.world, jib, Vec3{6, 5, 0});
     tip.radius = 0.2;
     tip.axis = conjugate(h.world.orientation(jib)) * kZ;
-    const RopeId r = h.world.addRope(d, std::vector<RopePoint>{fixedAt(Vec3{0.3, 0.2, 0}), tip, on(h.world, load, Vec3{6, 1, 0})});
+    const RopeId r =
+        h.world.addRope(d, std::vector<RopePoint>{fixedAt(Vec3{0.3, 0.2, 0}), tip, on(h.world, load, Vec3{6, 1, 0})});
     h.world.setSpoolLever(r, -1.0);
     double stretch = 0.0;
     for (int s = 0; s < 360; ++s) {

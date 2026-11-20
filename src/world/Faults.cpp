@@ -79,8 +79,7 @@ namespace hf {
             if (md.frozen || md.groupOfLink.empty()) continue;
             const int island = groups[std::size_t(md.groupOfLink[0])].island;
             if (islandFaulted[std::size_t(island)]) continue;
-            // The link whose rates went wrong first: mid-step, before they spread through the machine, the one that
-            // went wrong.
+            // Mid-step, before its rates spread through the machine: the first link gone wrong is the one to name.
             const Articulation &art = md.m.art;
             for (std::size_t l = 0; l < art.links.size(); ++l)
                 for (int k = 0; k < art.links[l].ndof; ++k)

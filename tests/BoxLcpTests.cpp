@@ -142,8 +142,7 @@ TEST_CASE("friction rows bounded by the push they ride on") {
         std::vector<double> A(M * M), b(M), lo(M, 0.0), hi(M, 0.0);
         std::vector<Follow> follow(M);
         for (std::size_t i = 0; i < M; ++i) {
-            for (std::size_t j = 0; j < M; ++j)
-                A[i * M + j] = dot(lin[i], lin[j]) / mass + dot(ang[i], invI * ang[j]);
+            for (std::size_t j = 0; j < M; ++j) A[i * M + j] = dot(lin[i], lin[j]) / mass + dot(ang[i], invI * ang[j]);
             b[i] = dot(lin[i], v) + dot(ang[i], w);
             if (i % 3 == 0) hi[i] = inf;
             else follow[i] = {int(i - i % 3), rnd.uni(0.1, 1.0)};

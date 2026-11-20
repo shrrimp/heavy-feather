@@ -29,13 +29,13 @@ namespace {
         return w.addBody(b);
     }
 
-    // A wheel turning about Z on the world, on a joint of this type at its centre.
     struct Guide {
         BodyId body;
         JointId joint;
         double radius = 0.0;
     };
 
+    // A wheel turning about Z on the world, on a joint of this type at its centre.
     Guide guideAt(World &w, JointType type, const Vec3 &at, double radius) {
         Guide g;
         g.radius = radius;
@@ -127,8 +127,8 @@ TEST_CASE("a sprocket keeps its step on the chain through thousands of steps of 
         c.w.step(kDt);
         small.follow(c.w.jointPosition(c.small.joint));
         large.follow(c.w.jointPosition(c.large.joint));
-        worst = std::max({worst, std::fabs(slip(small, c.small.radius) - small0),
-                          std::fabs(slip(large, c.large.radius) - large0)});
+        worst = std::max(
+            {worst, std::fabs(slip(small, c.small.radius) - small0), std::fabs(slip(large, c.large.radius) - large0)});
     }
     CHECK_MESSAGE(worst < 0.01 * kPitch, "never a hundredth of a link off its teeth");
 }
@@ -156,7 +156,7 @@ TEST_CASE("a belt goes with a guide's hinge, and with a guide removed") {
     b.w.step(kDt);
 }
 
-TEST_CASE("a guide held to its machine by the belt alone floats with it, and the machine runs") {
+TEST_CASE("a guide held to its machine by the belt alone floats with it, in its machine") {
     World w;
     BodyDesc fd;
     fd.position = Vec3{0.5, 0, 0};
@@ -172,7 +172,7 @@ TEST_CASE("a guide held to its machine by the belt alone floats with it, and the
     ad.inertia = Mat3(0.5);
     const BodyId arm = w.addBody(ad);
     const BodyId large = wheel(w, Vec3{1, 0, 0}, pitchRadius(30));
-    // Braked: a drive's row is what reaches for the joint's place in the machine's tree.
+    // A motor braked, not a free hinge: its drive's row is what puts the joint in the machine's tree.
     const JointId hinge = w.addJoint(jointAt(w, JointType::Motor, arm, large, Vec3{1, 0, 0}, kZ));
     drive(w, hinge, 0.0, 5.0);
     BeltDesc d;
@@ -207,13 +207,13 @@ TEST_CASE("a belt goes with its carrier, and with its guide's hinge moved to ano
     d.length = 3.0;
     d.mass = 2.0;
     const BeltGuide loop[] = {meshing(ga), meshing(gb)};
-    const BeltId one = w.addBelt(d, loop);
-    REQUIRE(w.contains(one));
+    const BeltId byHinge = w.addBelt(d, loop);
+    REQUIRE(w.contains(byHinge));
     w.step(kDt);
     JointDesc moved = w.jointDesc(gb.joint);
     moved.b = a.body;
     w.setJoint(gb.joint, moved);
-    CHECK(!w.contains(one));
+    CHECK(!w.contains(byHinge));
     w.step(kDt);
 
     World v;
@@ -229,11 +229,11 @@ TEST_CASE("a belt goes with its carrier, and with its guide's hinge moved to ano
     v.addJoint(jointAt(v, JointType::Hinge, frame2, arm, Vec3{1, 0.2, 0}, kZ));
     d.carrier = frame2;
     const BeltGuide loop2[] = {meshing(va), meshing(vb)};
-    const BeltId three = v.addBelt(d, loop2);
-    REQUIRE(v.contains(three));
+    const BeltId byCarrier = v.addBelt(d, loop2);
+    REQUIRE(v.contains(byCarrier));
     v.step(kDt);
     v.removeBody(frame2);
-    CHECK(!v.contains(three));
+    CHECK(!v.contains(byCarrier));
     v.step(kDt);
 }
 
@@ -258,7 +258,8 @@ TEST_CASE("a chain put back with its sprockets by setBeltMotion runs on as it ra
 
 TEST_CASE("belts the world can't use are refused") {
     World w;
-    const Guide a = guideAt(w, JointType::Hinge, Vec3{0, 0, 0}, 0.2), b = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, 0.2);
+    const Guide a = guideAt(w, JointType::Hinge, Vec3{0, 0, 0}, 0.2),
+                b = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, 0.2);
     const Guide tilted = [&] {
         Guide g;
         g.radius = 0.2;
@@ -314,7 +315,7 @@ TEST_CASE("an island put back puts its belt back where the step found it") {
     CHECK_MESSAGE(c.w.beltSpeed(c.chain) > 0.0, "and it runs on");
 }
 
-TEST_CASE("a chain on a frame that tumbles keeps its ratio on the frame, and the frame feels its drive") {
+TEST_CASE("a chain on a frame that tumbles keeps its ratio on the frame") {
     WorldSettings s;
     s.gravity = Vec3{};
     World w(s);
@@ -331,7 +332,8 @@ TEST_CASE("a chain on a frame that tumbles keeps its ratio on the frame, and the
         g.joint = w.addJoint(jointAt(w, type, frame, g.body, at, kZ));
         return g;
     };
-    const Guide small = onFrame(JointType::Motor, Vec3{0, 0, 0}, 12), large = onFrame(JointType::Hinge, Vec3{1, 0, 0}, 30);
+    const Guide small = onFrame(JointType::Motor, Vec3{0, 0, 0}, 12),
+                large = onFrame(JointType::Hinge, Vec3{1, 0, 0}, 30);
     BeltDesc d;
     d.carrier = frame;
     d.length = 3.0;
@@ -506,7 +508,8 @@ TEST_CASE("a frame yawing with a running belt on it is twisted by the belt's tur
         g.joint = w.addJoint(jointAt(w, type, frame, g.body, at, kZ));
         return g;
     };
-    const Guide driven = onFrame(JointType::Motor, Vec3{-0.5 * d, 0, 0}), idle = onFrame(JointType::Hinge, Vec3{0.5 * d, 0, 0});
+    const Guide driven = onFrame(JointType::Motor, Vec3{-0.5 * d, 0, 0}),
+                idle = onFrame(JointType::Hinge, Vec3{0.5 * d, 0, 0});
     BeltDesc b;
     b.carrier = frame;
     b.length = 2.0 * d + 2.0 * kPi * R;
@@ -593,8 +596,8 @@ namespace {
             track = w.addBelt(d, loop);
         }
 
-        double weight() const { return (40.0 + 2.0 * 2.0 + 4.0) * 9.81; }
         double mass() const { return 40.0 + 2.0 * 2.0 + 4.0; }
+        double weight() const { return mass() * 9.81; }
 
         void touch() {
             w.clearContacts();
@@ -636,8 +639,10 @@ TEST_CASE("a track on the ground carries its block at the track's speed, and tur
     t.drive(2.0);
     const double speed = t.w.beltSpeed(t.track);
     CHECK(std::fabs(speed - 4.0 * Tracked::kR) < 1e-6);
-    CHECK_MESSAGE(std::fabs(t.w.velocity(t.block).x + speed) < 1e-3, "the bottom stands on the ground while the block goes");
-    CHECK_MESSAGE(std::fabs(t.w.jointVelocity(t.idler.joint) - 4.0) < 1e-3, "the ground's push presses the idler on the belt");
+    CHECK_MESSAGE(std::fabs(t.w.velocity(t.block).x + speed) < 1e-3,
+                  "the bottom stands on the ground while the block goes");
+    CHECK_MESSAGE(std::fabs(t.w.jointVelocity(t.idler.joint) - 4.0) < 1e-3,
+                  "the ground's push presses the idler on the belt");
     CHECK(std::fabs(t.w.position(t.block).y - Tracked::kR) < 0.01);
 }
 
@@ -658,7 +663,7 @@ TEST_CASE("a track pulls with at most its friction times its weight, and spins p
     const double v0 = spun.w.velocity(spun.block).x;
     spun.drive(1.0, push);
     const double pulled = push - spun.mass() * (spun.w.velocity(spun.block).x - v0);
-    // Converged (64 sweeps) it comes out 2.5 % short of mu W, as the block pitches under the push: not the sweep's crawl.
+    // Converged (64 sweeps) it is 2.5 % short of mu W as the block pitches under the push: not the sweep's crawl.
     CHECK_MESSAGE(std::fabs(pulled / (Tracked::kFriction * spun.weight()) - 1.0) < 0.04, "pulled with " << pulled);
     CHECK_MESSAGE(spun.w.velocity(spun.block).x > 0.0, "pushed back while its track spins forward");
     CHECK(std::fabs(spun.w.beltSpeed(spun.track) - 4.0 * Tracked::kR) < 1e-5);
@@ -667,7 +672,8 @@ TEST_CASE("a track pulls with at most its friction times its weight, and spins p
 TEST_CASE("a conveyor carries a box along its top at its speed") {
     World w;
     const double R = 0.1;
-    const Guide head = guideAt(w, JointType::Motor, Vec3{0, 0, 0}, R), tail = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, R);
+    const Guide head = guideAt(w, JointType::Motor, Vec3{0, 0, 0}, R),
+                tail = guideAt(w, JointType::Hinge, Vec3{1, 0, 0}, R);
     BeltDesc d;
     d.length = 2.0 + 2.0 * kPi * R;
     d.mass = 3.0;

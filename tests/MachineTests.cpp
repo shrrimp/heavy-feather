@@ -402,8 +402,7 @@ TEST_CASE("a link's shared response gives each wrench's mobility") {
         for (int r = 0; r < 6; ++r)
             for (int c = 0; c < 6; ++c) quadratic += component(psi, r) * unheld[r][c] * component(psi, c);
         CHECK_MESSAGE(worst < 1e-10, "Σ ψ_c Z_c is the wrench's own mobility");
-        CHECK_MESSAGE(std::fabs(quadratic - free) < 1e-9 * (1 + free),
-                      "ψᵀ Λ ψ is its mobility with nothing held");
+        CHECK_MESSAGE(std::fabs(quadratic - free) < 1e-9 * (1 + free), "ψᵀ Λ ψ is its mobility with nothing held");
         const Motion moved = fb.m.art.twistOf(link, w.data());
         double worstTwist = 0.0;
         for (int r = 0; r < 6; ++r) {

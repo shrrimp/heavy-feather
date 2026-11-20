@@ -159,19 +159,18 @@ namespace hf {
             wrenchesAt(p, c, b.c + p.r2 - I.machines[std::size_t(b.machine)].m.art.O, 1.0, s.psi);
         }
         // Each machine's mobility is floored as one, its ends' cross terms in it.
-        for (int i = 0; i < p.ns; ++i) {
-            const int mi = p.sides[i].machine;
-            bool seen = false;
-            for (int j = 0; j < i; ++j) seen = seen || p.sides[j].machine == mi;
-            if (seen) continue;
+        if (p.ns == 2 && p.sides[0].machine == p.sides[1].machine) {
             Mobility k;
-            for (int j = i; j < p.ns; ++j) {
-                if (p.sides[j].machine != mi) continue;
-                addOwn(I, p, p.sides[j], k);
-                for (int l = i; l < j; ++l)
-                    if (p.sides[l].machine == mi) addCross(I, p, p.sides[l], p.sides[j], k);
-            }
+            addOwn(I, p, p.sides[0], k);
+            addOwn(I, p, p.sides[1], k);
+            addCross(I, p, p.sides[0], p.sides[1], k);
             addMobility(p, k);
+        } else {
+            for (int i = 0; i < p.ns; ++i) {
+                Mobility k;
+                addOwn(I, p, p.sides[i], k);
+                addMobility(p, k);
+            }
         }
     }
 
@@ -217,7 +216,8 @@ namespace hf {
         const Machine &m = I.machines[std::size_t(p.denseMachine)].m;
         const std::size_t n = std::size_t(m.dofs());
         const double *x = pseudo ? m.pseudo().data() : m.art.qdot.data();
-        for (int r = 0; r < std::min(rows, 3); ++r) v[r] += dot(I.responseArena.data() + p.denseOff + std::size_t(r) * n, x, n);
+        for (int r = 0; r < std::min(rows, 3); ++r)
+            v[r] += dot(I.responseArena.data() + p.denseOff + std::size_t(r) * n, x, n);
     }
 
     void machineImpulse(World::Impl &I, const ContactPrep &p, bool pseudo, int rows, const double *l) {

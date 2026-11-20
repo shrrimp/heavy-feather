@@ -18,6 +18,10 @@
 
 namespace hf {
 
+    constexpr double kMinSpringLength = 1e-3; // m: a stretchy cord shorter than this is as stiff as one this long
+    // A row pulling this much of its cap is at it: a spool overloads, a belt slips.
+    constexpr double kSlipping = 1.0 - 1e-6;
+
     struct BodySlot {
         BodyDesc desc;
         std::uint32_t generation = 0;
@@ -62,7 +66,7 @@ namespace hf {
         double lever = 0.0, leverPrev = 0.0;
         bool locked = false, latchPending = true, commanded = true;
 
-        // ITS STOPS: each one's row in the last sub-step's solve (-1: not near it), the speed it came at as that
+        // Its stops: each one's row in the last sub-step's solve (-1: not near it), the speed it came at as that
         // sub-step began, whether it held, and, struck hard, the speed it is to leave at in the next sub-step: its
         // bounce, asked of its row there. Course low and high, window low and high, cone.
         struct Stop {
@@ -72,6 +76,13 @@ namespace hf {
         };
         Stop stops[5];
     };
+
+    // Where a position drive aims: its moving setpoint while it drives; shut, where it stalled once commanded, else
+    // its target.
+    inline double driveAim(const JointSlot &j, bool shut) {
+        if (!shut) return j.targetEff;
+        return j.commanded ? j.holdPos : j.desc.target;
+    }
 
     struct GrabSlot {
         GrabDesc desc;
@@ -108,12 +119,13 @@ namespace hf {
         double length = 0.0;     // m paid out
         double lever = 0.0;      // its spools'
         double lengthRate = 0.0; // m/s the spools pay out this step
-        double cap = std::numeric_limits<double>::infinity(); // N its row may pull this step
         double force = 0.0;      // N, the last sub-step's tension: the next one's warm start
         double peak = 0.0;       // N, the most this step
         double span = 0.0;       // m along its route
         bool slipping = false;   // at its cap last sub-step: paying out under the load
         bool broken = false;
+        // N its row may pull this step.
+        double cap = std::numeric_limits<double>::infinity();
 
         // This step: the machine whose solve holds it, -1 swept, -2 not stepped; its row there; its island. And how
         // it was solved the last step it was stepped.
@@ -138,7 +150,8 @@ namespace hf {
         // On the carrier, from its body's origin in its axes (the world's, for none): the loop's middle, where its
         // link turns, and the axis it runs round, positive the way it runs.
         Vec3 middle{}, axis{};
-        double radius = 1.0; // m: 2A/L, so the link's angular momentum is a belt's of length L round area A
+        // m: 2A/L, so the link spins as a belt of length L round area A would; never below its smallest guide's.
+        double radius = 1.0;
         double span = 0.0;
 
         double position = 0.0, speed = 0.0; // m, m/s along the loop
@@ -154,13 +167,13 @@ namespace hf {
         std::vector<double> spinCaps;
         std::vector<double> grip; // N, each guide's push from the contacts it carries
         int slipping = 0;
+        bool broken = false;
         // N: an elastic belt's pull from its stretch alone. On guides that can't move apart its length row has nothing
         // to pull, and this is the tension it grips with.
         double stretched() const {
             if (!std::isfinite(desc.stiffness)) return 0.0;
-            return desc.stiffness * std::max(0.0, span - desc.length) / std::max(desc.length, 1e-3);
+            return desc.stiffness * std::max(0.0, span - desc.length) / std::max(desc.length, kMinSpringLength);
         }
-        bool broken = false;
     };
 
     // How far q turns about the unit axis a, in (-π, π]: its twist, whatever it swings besides.
@@ -176,6 +189,19 @@ namespace hf {
 
     // A piston or a servo: a drive toward a position, with a valve.
     inline bool positionDrive(JointType t) { return t == JointType::Piston || t == JointType::Servo; }
+    // The joints that turn about one axis: what a belt's guide may be.
+    inline bool turns(JointType t) {
+        return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring || t == JointType::Servo;
+    }
+
+    inline void wakeUp(BodySlot &b) {
+        b.asleep = false;
+        b.stillSteps = 0;
+    }
+    inline void wakeUp(BodySlot *b) {
+        if (b) wakeUp(*b);
+    }
+
     // m or rad: within this of its target a position drive only nudges itself back; beyond, it travels at its speed.
     constexpr double kServoDeadband = 1e-3;
 

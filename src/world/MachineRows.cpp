@@ -22,8 +22,10 @@ namespace hf {
         // diagonal, so a closure always wins against it and twin cylinders a fraction of a millimetre apart don't
         // fight.
         constexpr double kServoYield = 1e-2;
-        constexpr double kServoRate = 0.01;     // m/s: how fast a piston's servo corrects drift near its target
-        constexpr double kDriveReached = 1e-4;  // m: a valved piston this close to its target shuts
+        // A drive's or a friction's row on its axis: soft by a hair, so two on one axis never make the solve singular.
+        constexpr double kAxisYield = 1e-7;
+        constexpr double kServoRate = 0.01;    // m/s: how fast a piston's servo corrects drift near its target
+        constexpr double kDriveReached = 1e-4; // m: a valved piston this close to its target shuts
         constexpr double kDriveSatSlack = 1e-9;
         constexpr double kDriveBackstep = 1e-6; // m: how far a load must push a saturated piston back to shut it
 
@@ -44,15 +46,23 @@ namespace hf {
         };
 
         // The joints that turn about one axis, and may have a window to turn in.
-        bool hinged(JointType t) { return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring; }
+        bool hinged(JointType t) {
+            return t == JointType::Hinge || t == JointType::Motor || t == JointType::AngularSpring;
+        }
 
         // A stop's place among a joint's (JointSlot::stops): course, window, cone.
         int stopIndex(std::uint64_t slot) {
-            return slot == kLimLo ? 0 : slot == kLimHi ? 1 : slot == kStopLo ? 2 : slot == kStopHi ? 3 : 4;
+            switch (slot) {
+                case kLimLo: return 0;
+                case kLimHi: return 1;
+                case kStopLo: return 2;
+                case kStopHi: return 3;
+                default: return 4;
+            }
         }
 
         std::uint64_t tagOf(const JointSlot &j, std::uint32_t index, std::uint64_t slot) {
-            return (std::uint64_t(j.generation) << 40) | (std::uint64_t(index) << 8) | slot;
+            return (std::uint64_t(j.generation & 0x3fffffu) << 40) | (std::uint64_t(index) << 8) | slot;
         }
 
         // A rope's rows, in a space of their own: no joint's or grab's tag has the top bit.
@@ -273,7 +283,7 @@ namespace hf {
                 row.lo = std::max(row.lo, -ceiling);
                 row.hi = std::min(row.hi, ceiling);
             }
-            row.relEps = 1e-7;
+            row.relEps = kAxisYield;
             md.driveRow[ri] = m.rowCount();
             hingeRateRow(r, 1.0, add(row, tagOf(j, r.joint, kDrive), 0.0));
         }
@@ -295,14 +305,14 @@ namespace hf {
                     j.holdPos = pos;
                     j.latchPending = false;
                 }
-                const double want = !hold ? j.targetEff : j.commanded ? j.holdPos : d.target;
+                const double want = driveAim(j, hold);
                 MachineRow row;
                 if (!hold) {
                     row.lo = -d.maxForce * h;
                     row.hi = d.maxForce * h;
                 }
                 driveUnbounded = !std::isfinite(row.lo) && !std::isfinite(row.hi);
-                row.relEps = 1e-7;
+                row.relEps = kAxisYield;
                 if (position()) {
                     // A servo with a finite flow, not a teleport: inside the deadband it corrects at kServoRate, so
                     // twin cylinders only nudge each other; outside, at its own speed.
@@ -346,8 +356,8 @@ namespace hf {
             MachineRow row;
             row.lo = -d.friction * h;
             row.hi = d.friction * h;
-            row.relEps = 1e-7;
-            if (hinged(d.type) || d.type == JointType::Servo) {
+            row.relEps = kAxisYield;
+            if (turns(d.type)) {
                 hingeRateRow(r, 1.0, add(row, tagOf(j, r.joint, kFriction), 0.0));
             } else if (d.type == JointType::Slider || d.type == JointType::Piston) {
                 sliderRateRow(r, 1.0, add(row, tagOf(j, r.joint, kFriction), 0.0));
@@ -485,7 +495,8 @@ namespace hf {
                     continue;
                 }
                 if (!std::isfinite(b.phase[k])) continue;
-                const double turn = turnAbout(conjugate(carrierTurn) * turnOf(guideGroup), conjugate(carrierTurn) * axis);
+                const double turn =
+                    turnAbout(conjugate(carrierTurn) * turnOf(guideGroup), conjugate(carrierTurn) * axis);
                 const double behind = wrapped(side * g.radius * turn + b.phase[k] - run, b.desc.pitch);
                 row.target = std::clamp(-(kJointBeta / I.h) * behind, -kMaxPosBias, kMaxPosBias);
                 rate(add(row, tagOf(b, std::size_t(bl.belt), k, kPosBase), behind));
@@ -496,7 +507,6 @@ namespace hf {
     // It pulls the guides' axles, never their spin: that is the meshing and spin rows' to carry, and through both the
     // drive would be counted twice.
     void RowBuilder::beltLengthRow(BeltSlot &b, std::size_t index) {
-        constexpr std::uint64_t kLength = 0xff;
         const bool rigid = !std::isfinite(b.desc.stiffness);
         if (mode == Mode::Measure) {
             const double s = b.desc.length - I.spanIn(b.route, b.bends, true, md);
@@ -519,15 +529,15 @@ namespace hf {
         row.lo = 0.0;
         if (position()) {
             row.target = slack >= 0.0 ? -slack / I.h : std::min(kJointBeta * -slack / I.h, kMaxPosBias);
-            std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, kPosBase + kLength), 0.0));
+            std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, kPosBase), 0.0));
             return;
         }
-        slackRow({b.desc.length, b.span, b.desc.stiffness, b.desc.damping, 0.0}, md.m.inverseMassAlong(J.data()), I.h,
-                 row.compliance, row.target);
+        slackRow({.length = b.desc.length, .span = b.span, .stiffness = b.desc.stiffness, .damping = b.desc.damping},
+                 md.m.inverseMassAlong(J.data()), I.h, row.compliance, row.target);
         row.target -= read;
         if (rigid) row.compliance = 0.0;
         b.row = md.m.rowCount();
-        std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, kLength), 0.0));
+        std::copy(J.begin(), J.end(), add(row, tagOf(b, index, 0xfff, 0), 0.0));
     }
 
     namespace {
@@ -573,7 +583,8 @@ namespace hf {
                 JointSlot &j = I.joints[r.joint];
                 const double e = std::clamp(j.desc.bounce, 0.0, 1.0);
                 for (JointSlot::Stop &s : j.stops) {
-                    const bool holds = s.row >= 0 && std::size_t(s.row) < lambda.size() && lambda[std::size_t(s.row)] > 0.0;
+                    const bool holds =
+                        s.row >= 0 && std::size_t(s.row) < lambda.size() && lambda[std::size_t(s.row)] > 0.0;
                     if (holds && !s.holding && s.approach > kStopBounceSpeed) s.leave = e * s.approach;
                     s.holding = holds;
                 }
@@ -637,8 +648,9 @@ namespace hf {
             const Vec3 at = g.c + g.q * (b->offset + b->rot * s.local), error = at - s.target;
             const bool turns = s.turns && s.desc.maxTorque > 0.0;
             const Vec3 turn = turns ? rotationVectorOf(s.targetRot * conjugate(normalize(g.q * b->rot))) : Vec3{};
+            const Vec3 axes[3] = {kX, kY, kZ};
             for (int k = 0; k < (turns ? 6 : 3); ++k) {
-                const Vec3 axis = k % 3 == 0 ? kX : k % 3 == 1 ? kY : kZ;
+                const Vec3 axis = axes[k % 3];
                 std::vector<double> &J = md.row;
                 J.assign(std::size_t(m.dofs()), 0.0);
                 if (k < 3) m.art.addPointRow(g.link, at, axis, 1.0, J.data());

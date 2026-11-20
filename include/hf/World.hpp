@@ -84,7 +84,7 @@ namespace hf {
 
         // Refused: a dynamic body without a positive mass, or whose inertia isn't symmetric positive definite.
         BodyId addBody(const BodyDesc &desc);
-        // Removes the body and every joint on it.
+        // Removes the body, every joint, grab and rope on it, and the belts it carries.
         void removeBody(BodyId body);
         bool contains(BodyId body) const;
 
@@ -124,9 +124,9 @@ namespace hf {
         void setStatic(BodyId body, bool isStatic);
         // See BodyDesc::fixedRotation. Turned on, the body stops turning where it is; off, it carries on from rest.
         void setFixedRotation(BodyId body, bool fixed);
-        // Sets the gravity scale for that body, only finite values accepted
+        // See BodyDesc::gravityScale. Refused: not finite.
         bool setGravityScale(BodyId body, double scale);
-        // Sets the damping of that body, damps world movement of the body, negative and NaN rejected
+        // See BodyDesc::damping. Refused: negative or NaN.
         bool setDamping(BodyId body, double rate);
         // A body still for long enough falls asleep, and isn't stepped until a push, an edit or an awake neighbour
         // wakes it. Its contacts still matter: they tell the world what it rests on, at no cost to the solve.
@@ -144,7 +144,8 @@ namespace hf {
         void removeJoint(JointId joint);
         bool contains(JointId joint) const;
         // Changes a joint in place. Drives, courses and springs apply from the next step; a new type, body or frame
-        // rebuilds its machine and restarts its drive. False if the joint is gone or the new bodies are invalid.
+        // rebuilds its machine and restarts its drive, and a belt's guide made so drops the belts round it. False if
+        // the joint is gone or the new bodies are invalid.
         bool setJoint(JointId joint, const JointDesc &desc);
         JointDesc jointDesc(JointId joint) const;
 
@@ -182,11 +183,10 @@ namespace hf {
         double routeSpan(std::span<const RopePoint> route, std::span<RopeBend> path = {}) const;
         void removeRope(RopeId rope);
         bool contains(RopeId rope) const;
-        // Its stiffness, strength and spools from the next step. A new length is paid out at once; a broken rope is
-        // mended.
+        // Its stiffness, strength and spools from the next step; a new length paid out at once, a broken rope mended.
         bool setRope(RopeId rope, const RopeDesc &desc);
         RopeDesc ropeDesc(RopeId rope) const;
-        // A new route for it, keeping what is paid out and how hard it pulls: where it catches on an edge, or comes off.
+        // A new route for it, keeping what is paid out and its pull: where it catches on an edge, or comes off.
         bool setRopeRoute(RopeId rope, std::span<const RopePoint> route);
         // Pays it out, or takes it in, at once: the host's hand, as an editor stretching it.
         bool setRopeLength(RopeId rope, double length);
@@ -203,23 +203,24 @@ namespace hf {
         std::span<const RopeId> brokenRopes() const;
 
         // A belt round its guides, in the order it runs round them, its sides and radii as given. Refused: fewer than
-        // two guides, a hinge that is gone or isn't one that turns, guides whose axes aren't parallel, a carrier that
-        // is gone, a radius, length or mass not positive, a pitch, stiffness, strength, damping or friction negative
-        // or NaN, a side other than ±1.
+        // two guides, a hinge that is gone or isn't one that turns, guides whose axes aren't parallel or that enclose
+        // nothing, a carrier that is gone, a radius, length, mass, stiffness or strength not positive, a pitch, damping
+        // or friction negative or not finite, a side other than ±1.
         BeltId addBelt(const BeltDesc &desc, std::span<const BeltGuide> loop);
         void removeBelt(BeltId belt);
         bool contains(BeltId belt) const;
-        // Its length, mass, teeth and stiffness from the next step; a broken belt is mended.
+        // Its length, mass, teeth, stiffness, damping and strength from the next step, a broken belt mended. Refused:
+        // another carrier, or what addBelt refuses.
         bool setBelt(BeltId belt, const BeltDesc &desc);
         // Round other guides, from where it is now; refused as addBelt refuses.
         bool setBeltLoop(BeltId belt, std::span<const BeltGuide> loop);
-        std::span<const BeltId> brokenBelts() const;                     // the last step's
+        std::span<const BeltId> brokenBelts() const; // the last step's
         BeltDesc beltDesc(BeltId belt) const;
         double beltPosition(BeltId belt) const; // m along the loop since it was added: where its links are now
         double beltSpeed(BeltId belt) const;    // m/s, positive the way its guides are listed
         // Its links put where they were and set running as they ran: a rewind's, with its guides' poses.
         bool setBeltMotion(BeltId belt, double position, double speed);
-        double beltTension(BeltId belt) const;  // N, over the last sub-step
+        double beltTension(BeltId belt) const; // N, over the last sub-step
         BeltInfo beltInfo(BeltId belt) const;
         // The belt round its guides as the last step solved it, one bend a guide: the number written.
         int beltPath(BeltId belt, std::span<RopeBend> out) const;
@@ -227,8 +228,8 @@ namespace hf {
         // The contacts for the next step. They are refreshed from their body-local points every sub-step, so the
         // host only detects once per step.
         void clearContacts();
-        // Refused: a point, depth or normal not finite, a normal far from unit length, a negative friction or lever
-        // arm. Restitution is clamped to [0, 1].
+        // Refused: a point, depth, normal or belt direction not finite, a normal far from unit length, a negative
+        // friction or lever arm. Restitution is clamped to [0, 1].
         bool addContact(const Contact &contact);
         // What each contact pushed with over the last step's last sub-step: the step's own, and those the world keeps
         // between sleepers, still holding them up. Read before the next step's contacts are handed: clearContacts

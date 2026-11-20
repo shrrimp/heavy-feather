@@ -24,19 +24,9 @@ namespace hf {
 
         constexpr double kInf = std::numeric_limits<double>::infinity();
         constexpr double kPi = std::numbers::pi;
-        constexpr double kRopeBeta = 0.8;         // fraction of a stretch corrected per sub-step, as a joint's error
-        constexpr double kMaxPosBias = 1000.0;    // m/s: a pose-only ceiling, it never becomes momentum
-        constexpr double kMinSpringLength = 1e-3; // m: a stretchy rope shorter than this is as stiff as this one
-        constexpr double kSlipping = 1.0 - 1e-6;  // a spool pulling this much of its cap is overloaded
-        constexpr double kRelEps = 1e-9;          // a rigid rope's compliance relative to its own mobility
-
-        void wakeUp(BodySlot *b) {
-            if (!b) return;
-            b->asleep = false;
-            b->stillSteps = 0;
-        }
-
-        bool nonNegative(double x, bool infinite = false) { return x >= 0.0 && (infinite || std::isfinite(x)); }
+        constexpr double kRopeBeta = 0.8;      // fraction of a stretch corrected per sub-step, as a joint's error
+        constexpr double kMaxPosBias = 1000.0; // m/s: a pose-only ceiling, it never becomes momentum
+        constexpr double kRelEps = 1e-9;       // a rigid rope's compliance relative to its own mobility
 
         bool usable(const RopeDesc &d) {
             return nonNegative(d.length) && nonNegative(d.stiffness, true) && d.stiffness > 0.0 &&
@@ -50,7 +40,13 @@ namespace hf {
                    (p.radius == 0.0 || length(p.axis) > 1e-9) && p.side >= -1 && p.side <= 1;
         }
 
-        int spools(const RopeDesc &d) { return d.spool == RopeSpool::Both ? 2 : d.spool == RopeSpool::None ? 0 : 1; }
+        int spools(const RopeDesc &d) {
+            switch (d.spool) {
+                case RopeSpool::None: return 0;
+                case RopeSpool::Both: return 2;
+                default: return 1;
+            }
+        }
 
         double withinSpools(const RopeDesc &d, double length) {
             return spools(d) ? std::clamp(length, d.minLength, d.maxLength) : length;
@@ -72,7 +68,7 @@ namespace hf {
 
     } // namespace
 
-    // A rope's velocity row for slack s, the spools paying out at their rate: a rigid rope lets the slack close within
+    // A cord's velocity row on its slack, the spools paying out at their rate: a rigid cord lets the slack close within
     // the sub-step and no further, a stretchy one is a spring on its stretch, as stiff as EA over its length.
     void slackRow(const Slack &s, double k, double h, double &gamma, double &target) {
         const double slack = s.length - s.span;
@@ -89,7 +85,12 @@ namespace hf {
     }
 
     void ropeSlackRow(const RopeSlot &r, double k, double h, double &gamma, double &target) {
-        slackRow({r.length, r.span, r.desc.stiffness, r.desc.damping, r.lengthRate}, k, h, gamma, target);
+        slackRow({.length = r.length,
+                  .span = r.span,
+                  .stiffness = r.desc.stiffness,
+                  .damping = r.desc.damping,
+                  .lengthRate = r.lengthRate},
+                 k, h, gamma, target);
     }
 
     // The position pass's target for a rigid rope: a stretch pulled back a share at a time, a slack one free to close.
@@ -128,8 +129,8 @@ namespace hf {
             }
             for (int k = p.blockBegin; k < p.blockBegin + p.blockCount; ++k) {
                 const ContactBlock &blk = I.ropeBlocks[std::size_t(k)];
-                I.machines[std::size_t(blk.machine)].m.applyContact(
-                    I.arena.data() + blk.off + std::size_t(blk.n), dl, pseudo);
+                I.machines[std::size_t(blk.machine)].m.applyContact(I.arena.data() + blk.off + std::size_t(blk.n), dl,
+                                                                    pseudo);
             }
         }
 
@@ -212,8 +213,10 @@ namespace hf {
                 double rate = r.lever * d.speed * spools(d);
                 if ((rate > 0.0 && r.length >= d.maxLength) || (rate < 0.0 && r.length <= d.minLength)) rate = 0.0;
                 r.lengthRate = rate;
-                const bool tied = r.length >= d.maxLength;
-                r.cap = rate < 0.0 ? d.maxForce : tied ? kInf : rate > 0.0 ? d.maxForce : d.brakeForce;
+                if (rate < 0.0) r.cap = d.maxForce;
+                else if (r.length >= d.maxLength) r.cap = kInf;
+                else if (rate > 0.0) r.cap = d.maxForce;
+                else r.cap = d.brakeForce;
             }
             steppedRopes.push_back(int(ri));
         }
@@ -349,8 +352,9 @@ namespace hf {
             double *S = ropeS.data() + ropeBlockStart[i];
             for (int x = 0; x < n; ++x)
                 for (int y = 0; y < n; ++y)
-                    S[x * n + y] = x == y ? ropePreps[std::size_t(b + x)].k
-                                          : coupling(*this, ropePreps[std::size_t(b + x)], ropePreps[std::size_t(b + y)]);
+                    S[x * n + y] = x == y
+                                       ? ropePreps[std::size_t(b + x)].k
+                                       : coupling(*this, ropePreps[std::size_t(b + x)], ropePreps[std::size_t(b + y)]);
         }
     }
 
@@ -391,13 +395,15 @@ namespace hf {
             const double l = pseudo ? p.pseudo : p.lambda;
             double Sl = 0.0;
             for (std::size_t j = 0; j < m; ++j)
-                Sl += S[i * m + j] * (pseudo ? ropePreps[std::size_t(begin) + j].pseudo
-                                             : ropePreps[std::size_t(begin) + j].lambda);
+                Sl += S[i * m + j] *
+                      (pseudo ? ropePreps[std::size_t(begin) + j].pseudo : ropePreps[std::size_t(begin) + j].lambda);
             ropeA[i * m + i] += p.gamma;
             ropeB[i] = ropeV[i] - Sl - (pseudo ? p.posTarget : p.target);
             ropeHi[i] = pseudo ? (rigid(p) ? kInf : 0.0) : p.hi;
             ropeX[i] = l;
-            ropeState[i] = l <= 0.0 ? RowState::AtLo : l >= ropeHi[i] ? RowState::AtHi : RowState::Free;
+            ropeState[i] = RowState::Free;
+            if (l <= 0.0) ropeState[i] = RowState::AtLo;
+            else if (l >= ropeHi[i]) ropeState[i] = RowState::AtHi;
         }
         solveBoxLcp(ropeA, ropeB, ropeLo, ropeHi, n, ropeX, ropeState, ropeLcp);
         for (std::size_t i = 0; i < m; ++i) {

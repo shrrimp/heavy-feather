@@ -130,7 +130,7 @@ namespace hf {
         std::vector<int> freeIdx_;
         std::vector<double> Aff_;
         std::vector<Follow> follow_;
-        std::vector<int> bIdx_, bOf_;      // bounded rows, and each row's place among them (-1: not bounded)
+        std::vector<int> bIdx_, bOf_;             // bounded rows, and each row's place among them (-1: not bounded)
         std::vector<double> bW_, bK_, bG_, bK12_; // their W Jᵀ, effective inverse mass, compliance, pair coupling
 
         std::vector<MachineRow> posRows_;

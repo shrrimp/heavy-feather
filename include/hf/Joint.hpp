@@ -37,10 +37,10 @@ namespace hf {
 
         double min = -1.0, max = 1.0; // Slider, Piston and Servo: the course, in m or rad; a servo's counts as a window
 
-        // Stops. Hinge, Motor and AngularSpring: the window it turns within, rad from where it was built: anywhere round
-        // the turn, across the half turn too, and no more than a whole turn wide; its angle is then counted the way round
-        // that falls inside it (jointPosition too). Ball: the cone B's axis swings within, the most it turns off the cone's middle, rad, and that
-        // middle, in A's frame: X opens it round the joint's own axis. Infinite: free.
+        // Stops, infinite for none. Hinge, Motor and AngularSpring: the window it turns within, rad from where it was
+        // built: anywhere round the turn, across the half turn too, no more than a whole turn wide; its angle is then
+        // counted the way round that falls inside it (jointPosition too). Ball: the cone B's axis swings within, the
+        // most it turns off the cone's middle, rad, and that middle in A's frame, X round the joint's own axis.
         double lowerAngle = -std::numeric_limits<double>::infinity();
         double upperAngle = std::numeric_limits<double>::infinity();
         double coneAngle = std::numeric_limits<double>::infinity();

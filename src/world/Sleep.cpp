@@ -8,7 +8,7 @@
 
 #include "world/WorldImpl.hpp"
 
-// Sleeping, as the prototype does it: a body still for a few steps falls asleep unless something it touches still
+// Sleeping: a body still for a few steps falls asleep unless something it touches still
 // moves, and each step the awake bodies flood out to whatever they could disturb; the rest stand still, as if static.
 // A machine sleeps and wakes whole, and a drive at work keeps it awake.
 namespace hf {
@@ -16,12 +16,12 @@ namespace hf {
     namespace {
 
         constexpr int kStillSteps = 8;
-        constexpr double kStillSpeed2 = 5e-4;      // m²/s²
-        constexpr double kStillSpin2 = 1e-4;       // (ω × radius)², m²/s²
-        constexpr double kStillCorrection = 1e-5;  // m the position pass may still be moving it
-        constexpr int kMaxDepth = 2;               // contacts a wake travels through; joints don't count
-        constexpr std::uint64_t kConductAge = 2;   // steps a pair still carries force after it last touched
-        constexpr std::uint64_t kLostSupport = 2;  // steps apart before a sleeper's support is gone: one is flicker
+        constexpr double kStillSpeed2 = 5e-4;     // m²/s²
+        constexpr double kStillSpin2 = 1e-4;      // (ω × radius)², m²/s²
+        constexpr double kStillCorrection = 1e-5; // m the position pass may still be moving it
+        constexpr int kMaxDepth = 2;              // contacts a wake travels through; joints don't count
+        constexpr std::uint64_t kConductAge = 2;  // steps a pair still carries force after it last touched
+        constexpr std::uint64_t kLostSupport = 2; // steps apart before a sleeper's support is gone: one is flicker
         constexpr std::uint64_t kForgetAge = 4;
 
         std::uint64_t keyOf(BodyId id) { return (std::uint64_t(id.index) << 32) | id.generation; }
@@ -65,7 +65,7 @@ namespace hf {
             if (d.type == JointType::Motor) return d.target != 0.0;
             if (!positionDrive(d.type)) return false;
             const bool held = std::isfinite(d.maxForce) && j.locked;
-            const double want = !held ? j.targetEff : j.commanded ? j.holdPos : d.target;
+            const double want = driveAim(j, held);
             return j.lever != 0.0 || j.targetFrom != d.target || std::fabs(j.position - want) > kOff;
         }
 
@@ -126,7 +126,8 @@ namespace hf {
                 return x;
             };
             for (const SleepLink &l : I.sleepLinks) {
-                if (!(l.touching || l.jointed) || !I.reached[std::size_t(l.a)] || !I.reached[std::size_t(l.b)]) continue;
+                if (!(l.touching || l.jointed) || !I.reached[std::size_t(l.a)] || !I.reached[std::size_t(l.b)])
+                    continue;
                 // A kinematic body joins no island: nothing it touches can push it.
                 if (I.groups[std::size_t(l.a)].isStatic || I.groups[std::size_t(l.b)].isStatic) continue;
                 const int a = find(l.a), b = find(l.b);

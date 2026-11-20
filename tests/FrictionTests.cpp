@@ -59,7 +59,7 @@ TEST_CASE("a hinge holds what its friction can bear and gives to what it can't")
 }
 
 TEST_CASE("a ball holds a swing its friction can bear on each axis") {
-    // Its axis across the swing, then along it: the swing about the first of its axes, then about another.
+    // Its frame's X square to the swing, then along the arm: the swing comes about one of its axes, then another.
     for (const Vec3 axis : {kZ, Vec3{1, 0, 0}}) {
         World holds, gives;
         const JointId a = armOn(holds, JointType::Ball, 600.0, axis);

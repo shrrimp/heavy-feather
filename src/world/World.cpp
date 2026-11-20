@@ -10,12 +10,6 @@ namespace hf {
 
     namespace {
 
-        void wakeUp(BodySlot *b) {
-            if (!b) return;
-            b->asleep = false;
-            b->stillSteps = 0;
-        }
-
         void wakeEnds(World::Impl &I, const JointDesc &d) {
             wakeUp(I.body(d.a));
             wakeUp(I.body(d.b));
@@ -24,7 +18,7 @@ namespace hf {
         bool attachable(const World::Impl &I, const JointDesc &d) {
             const bool aOk = d.a.valid() ? I.body(d.a) != nullptr : d.b.valid();
             const bool bOk = d.b.valid() ? I.body(d.b) != nullptr : d.a.valid();
-            return aOk && bOk && !(d.a == d.b);
+            return aOk && bOk && d.a != d.b;
         }
 
         // Symmetric to rounding, and positive definite: every leading minor above zero.
@@ -56,9 +50,6 @@ namespace hf {
                    finite(d.centerOfMass) && std::isfinite(d.radius) && std::isfinite(d.gravityScale) &&
                    !std::isnan(d.damping) && (d.damping >= 0.0) && massProperties(d.isStatic, d.mass, d.inertia);
         }
-
-        // At or above zero, and a number; infinite only where infinite means no limit.
-        bool nonNegative(double x, bool infinite = false) { return x >= 0.0 && (infinite || std::isfinite(x)); }
 
         // A turning window, no more than a whole turn wide; open at an end, any.
         bool withinTurn(double lo, double hi) {
@@ -453,10 +444,8 @@ namespace hf {
         const double target = j->desc.target;
         // A guide's hinge on other bodies, in another place, or made one that doesn't turn: the belts round it go, to
         // be made again round it as it is.
-        const bool turning = desc.type == JointType::Hinge || desc.type == JointType::Motor ||
-                             desc.type == JointType::AngularSpring || desc.type == JointType::Servo;
-        if (!(j->desc.a == desc.a) || !(j->desc.b == desc.b) || !(j->desc.frameA == desc.frameA) ||
-            !(j->desc.frameB == desc.frameB) || !turning)
+        if (reshape && (j->desc.a != desc.a || j->desc.b != desc.b || j->desc.frameA != desc.frameA ||
+                        j->desc.frameB != desc.frameB || !turns(desc.type)))
             I.removeBeltsOn(id);
         if (reshape) I.touchJoint(j->desc);
         j->desc = desc;

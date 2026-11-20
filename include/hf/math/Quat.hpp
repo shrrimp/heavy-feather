@@ -29,7 +29,6 @@ namespace hf {
 
     constexpr Quat operator+(const Quat &p, const Quat &q) { return {p.w + q.w, p.x + q.x, p.y + q.y, p.z + q.z}; }
 
-    // Rotates v by q.
     constexpr Vec3 operator*(const Quat &q, const Vec3 &v) {
         const Vec3 u{q.x, q.y, q.z};
         const Vec3 uv = cross(u, v);

@@ -183,7 +183,7 @@ namespace hf {
         for (std::size_t i = 0; i < m; ++i) {
             const int g = rows[i].group;
             if (g < 0 || rows[i].groupYield <= 0.0) continue;
-            if (i > 0 && rows[i - 1].group == g) continue; // first row of its group
+            if (i > 0 && rows[i - 1].group == g) continue;
             std::size_t k = 1;
             while (i + k < m && rows[i + k].group == g && k < 3) ++k;
 

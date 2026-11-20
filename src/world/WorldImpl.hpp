@@ -154,7 +154,7 @@ namespace hf {
         int ns = 0;
         MachineSide sides[2];
         // A belt's end: its rows over its machine's whole velocity, each row's g and then W g, three of each, in
-        // responseArena at off. -1: none.
+        // responseArena at denseOff. -1: none.
         int denseMachine = -1;
         std::size_t denseOff = 0;
     };
@@ -189,8 +189,8 @@ namespace hf {
     };
 
     // Ropes.cpp: a rope that isn't inside one machine, this sub-step: one row, J v + gamma λ = target with
-    // 0 <= λ <= hi, J v the rate its slack grows by the bodies' motion. Its rigid groups in ropeEnds, its machines (g then W g in the
-    // arena) in ropeBlocks. The ropes of an island are solved together, exactly: see sweepRopes.
+    // 0 <= λ <= hi, J v the rate its slack grows by the bodies' motion. Its rigid groups in ropeEnds, its machines (g
+    // then W g in the arena) in ropeBlocks. The ropes of an island are solved together, exactly: see sweepRopes.
     struct RopePrep {
         int rope = 0, island = 0;
         int endBegin = 0, endCount = 0, blockBegin = 0, blockCount = 0;
@@ -441,9 +441,9 @@ namespace hf {
 
         // Contacts.cpp
         void beginContacts();
-        void contactRows(MachineData &md);         // its direct contacts' velocity rows, beside its joints'
-        void contactPositionRows(MachineData &md); // and their position rows
-        void recordContacts(MachineData &md);      // their answers, back into the contacts
+        void contactRows(MachineData &md);               // its direct contacts' velocity rows, beside its joints'
+        void contactPositionRows(MachineData &md);       // and their position rows
+        void recordContacts(MachineData &md);            // their answers, back into the contacts
         double contactDepth(const ContactData &c) const; // refreshed from the poses, after updateTurned
         void updateTurned();                             // this pass's groups
         void prepareContacts();
@@ -458,17 +458,16 @@ namespace hf {
         void keepResting(); // once the step is done: contacts left between sleepers stay in the world
 
         // Ropes.cpp
-        void beginRopes(); // once a step, in beginContacts: which are stepped, and how each is solved
+        void beginRopes();         // once a step, in beginContacts: which are stepped, and how each is solved
         void layRope(RopeSlot &r); // as it lies: its bends and its span
         void measureRopes();       // each sub-step, before the machines' solves: the ropes as they lie
-        void prepareRopes(); // the swept ones' rows, after the springs'
+        void prepareRopes();       // the swept ones' rows, after the springs'
         void sweepRopes(int island, bool pseudo);
         void recordRopes(MachineData &md); // the rows its solve held, read back
         void afterRopes();                 // each sub-step, its velocities solved: the spools' length
         void endRopes();                   // once the step is done: peaks, breaks
         void wakeRope(const RopeSlot &r);
         double ropeSpanIn(const RopeSlot &r, const MachineData &md) { return spanIn(r.route, r.bends, false, md); }
-        // A route's span with md's links where the line search put them.
         double spanIn(const std::vector<RopePoint> &route, const std::vector<RopeBendState> &bends, bool closed,
                       const MachineData &md);
 
@@ -478,16 +477,17 @@ namespace hf {
         int carrierGroup(const BeltSlot &b) const; // 0 for the world
         // The groups a belt joins into one machine: its carrier's and its guides'; the static ones too.
         void beltGroups(const BeltSlot &b, std::vector<int> &out) const;
-        void beginBelts();          // once a step, after the machines are read: which machine holds each, and where
-        void layBelt(BeltSlot &b);  // as it lies: its bends, its span
+        void beginBelts();         // once a step, after the machines are read: which machine holds each, and where
+        void layBelt(BeltSlot &b); // as it lies: its bends, its span
         void placeTeeth(BeltSlot &b);
-        void measureBelts();        // each sub-step, before the machines' solves
+        void measureBelts(); // each sub-step, before the machines' solves
         bool loopOf(const BeltDesc &desc, std::span<const BeltGuide> loop, BeltSlot &b) const;
+        bool guidesHere(std::span<const BeltGuide> loop) const;
         ContactData::Grip gripOf(const Contact &k, const Group &guide) const;
         Vec3 gripVelocity(const ContactData &c) const; // the belt's at the point, on b's end
         void recordGrips();                            // each guide's push from its belt's contacts
-        void recordBelts(MachineData &md); // the rows its solve held, read back
-        void endBelts();            // once the step is done, faults put back: how far each has run, what broke
+        void recordBelts(MachineData &md);             // the rows its solve held, read back
+        void endBelts(); // once the step is done, faults put back: how far each has run, what broke
         void removeBeltsOn(JointId hinge);
         void dropBelt(std::uint32_t index);
         // Where its link turns on its carrier's group, as a joint's end; and the link's state in the world, from the
@@ -539,8 +539,8 @@ namespace hf {
         void endStepBodies(); // what moved, and the host's writes forgotten
 
         // Sleep.cpp
-        void beginSleep(); // who is stepped: the awake, and what they reach
-        void endSleep();   // who falls asleep, and who lost the support they slept on
+        void beginSleep();            // who is stepped: the awake, and what they reach
+        void endSleep();              // who falls asleep, and who lost the support they slept on
         void wakePartners(BodyId id); // whatever it touched lately
 
         void step(double dt);

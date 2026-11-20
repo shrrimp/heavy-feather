@@ -96,7 +96,6 @@ namespace {
 
 } // namespace
 
-
 TEST_CASE("a valve floats at the cam speed its spring predicts") {
     // The widest daylight between the follower and the lobe over a few turns, once the start has settled.
     const auto widestGap = [](double speed) {

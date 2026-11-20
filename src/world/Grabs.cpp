@@ -11,11 +11,6 @@ namespace hf {
 
     namespace {
 
-        void wakeUp(BodySlot &b) {
-            b.asleep = false;
-            b.stillSteps = 0;
-        }
-
         bool usable(const GrabDesc &d) {
             const auto cap = [](double x) { return x >= 0.0; }; // infinite: no cap
             return cap(d.maxForce) && cap(d.maxTorque) && std::isfinite(d.hertz) && d.hertz >= 0.0 &&

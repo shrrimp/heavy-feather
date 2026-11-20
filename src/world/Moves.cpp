@@ -13,11 +13,6 @@ namespace hf {
 
     namespace {
 
-        void wakeUp(BodySlot &b) {
-            b.asleep = false;
-            b.stillSteps = 0;
-        }
-
         bool identity(const Vec3 &fromC, const Quat &fromQ, const Vec3 &toC, const Quat &toQ) {
             return length(toC - fromC) <= 1e-9 && std::fabs(dot(fromQ, toQ)) >= 1.0 - 1e-12;
         }

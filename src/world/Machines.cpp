@@ -175,8 +175,8 @@ namespace hf {
                 L.anchorRot = I.groups[std::size_t(e.group)].q;
             }
             L.mass = b.desc.mass;
-            const double turn = b.desc.mass * b.radius * b.radius;
-            L.inertiaBody = Mat3(turn, 0, 0, 0, 0.5 * turn, 0, 0, 0, 0.5 * turn);
+            const double spin = b.desc.mass * b.radius * b.radius;
+            L.inertiaBody = Mat3(spin, 0, 0, 0, 0.5 * spin, 0, 0, 0, 0.5 * spin);
             return L;
         }
 
@@ -244,9 +244,9 @@ namespace hf {
                 L.mass = 1.0 / g.invMass;
                 L.gravityScale = g.gravityScale;
                 L.damping = g.damping;
-                L.inertiaBody = g.fixedRotation ? g.inertiaBody
-                                : std::fabs(determinant(g.invInertiaBody)) > 1e-300 ? inverse(g.invInertiaBody)
-                                                                                    : Mat3(L.mass * 1e-3);
+                if (g.fixedRotation) L.inertiaBody = g.inertiaBody;
+                else if (std::fabs(determinant(g.invInertiaBody)) > 1e-300) L.inertiaBody = inverse(g.invInertiaBody);
+                else L.inertiaBody = Mat3(L.mass * 1e-3);
                 if (!via) {
                     L.kind = JointKind::Free;
                 } else {
@@ -353,10 +353,6 @@ namespace hf {
             }
             md.joints = std::move(refs);
         }
-
-    } // namespace
-
-    namespace {
 
         // A belt's groups make one machine: one of them rebuilt rebuilds them all, and the machines they were in.
         void redoBeltMachines(World::Impl &I, std::vector<std::uint8_t> &redo) {
@@ -595,11 +591,11 @@ namespace hf {
             L.anchorPos = groups[std::size_t(a.group)].c;
             L.anchorRot = groups[std::size_t(a.group)].q;
         }
-        const std::size_t n = md.groupOfLink.size();
-        md.c.resize(n + md.belts.size());
-        md.R.resize(n + md.belts.size());
-        md.v.resize(n + md.belts.size());
-        md.w.resize(n + md.belts.size());
+        const std::size_t n = md.groupOfLink.size(), links = n + md.belts.size();
+        md.c.resize(links);
+        md.R.resize(links);
+        md.v.resize(links);
+        md.w.resize(links);
         for (std::size_t i = 0; i < n; ++i) {
             const Group &g = groups[std::size_t(md.groupOfLink[i])];
             md.c[i] = g.c;

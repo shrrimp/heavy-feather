@@ -44,7 +44,8 @@ namespace hf {
         }
         // The nearest touching point before k and after it; round the loop when it is closed.
         const auto touchingFrom = [&](int k, int step) {
-            const int reach = closed ? count - 1 : (step < 0 ? k : count - 1 - k);
+            int reach = count - 1;
+            if (!closed) reach = step < 0 ? k : count - 1 - k;
             for (int i = 1; i <= reach; ++i) {
                 const int j = (k + step * i + count) % count;
                 if (bends[std::size_t(j)].touching) return j;
@@ -76,7 +77,7 @@ namespace hf {
                 const Vec3 in = tangentPoint(prevOut(k), b.p, b.n, rp.radius, side, true);
                 const Vec3 out = tangentPoint(nextIn(k), b.p, b.n, rp.radius, side, false);
                 const double raw = arcAngle(in, out, b.p, b.n, side);
-                double theta = raw;
+                double theta;
                 if (first && pass == 0) theta = raw < -0.5 * kPi ? raw + 2.0 * kPi : raw;
                 else theta = raw + 2.0 * kPi * std::round((b.theta - raw) / (2.0 * kPi));
                 b.in = in;
